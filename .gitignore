@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Data
+*.parquet
+*.h5
+*.feather
+*.csv.gz
+*.zip
+
+# Environment
+.env
+.venv/
+venv/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/settings.json
+
+# Logs & temp
+logs/
+*.log
+tmp/

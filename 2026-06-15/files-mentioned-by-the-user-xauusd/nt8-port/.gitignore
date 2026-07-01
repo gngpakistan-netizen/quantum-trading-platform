@@ -1,0 +1,26 @@
+# cTrader compiled artifacts
+*.dll
+*.exe
+*.pdb
+*.xml
+
+# Windows
+Thumbs.db
+*.user
+*.suo
+
+# .NET
+bin/
+obj/
+*.csproj.user
+*.cache
+*.csproj.bak
+
+# IDE
+.vs/
+.idea/
+*.swp
+*.sln.ide
+
+# Logs
+*.log

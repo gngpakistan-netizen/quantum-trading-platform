@@ -1,0 +1,21 @@
+# Cloudflare Pages — Frontend Deployment Configuration
+name = "xauusd-quantum"
+compatibility_date = "2024-12-01"
+
+[build]
+command = "cd apps/web && pnpm build"
+output = "apps/web/out"
+
+[build.environment]
+NODE_VERSION = "20"
+PNPM_VERSION = "9"
+
+[env.production]
+routes = [
+  { pattern = "*", zone_id = "", custom_domain = "quantum.yourdomain.com" }
+]
+
+[env.preview]
+routes = [
+  { pattern = "*", zone_id = "" }
+]

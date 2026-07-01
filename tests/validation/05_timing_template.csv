@@ -1,0 +1,2 @@
+TradeID,BarTimestamp,SignalTime,BarConfirmedTime,StrategyEntryTime,ActualFillTime,DashboardSnapshotTime,SignalPrice,BarConfirmedPrice,EntryPrice,FillPrice,DashboardBiasAtFill,Divergence_ms,Divergence_ticks,Notes
+,,,,,,,,,,,,,,

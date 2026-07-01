@@ -1,0 +1,2 @@
+TradeID,BarTimestamp,DashboardBias,DashboardProbability,TrendScore,LiqScore,SessionQuality,AnalogPrediction,ConfidenceScore,StrategyAction,MatchYN,Discrepancy
+,,bull/bear/range,0-100,0-100,0-100,composite,0-100,0-100,entry/exit/no action,yes/no,description of any mismatch

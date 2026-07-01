@@ -1,0 +1,13 @@
+DashboardField,SourceVariables,Formula,ExpectedOutput,ActualOutput,PassFail,Notes
+bullScore,"adx, dxy, close, ema50, ema200","composite score: trend(40%) + momentum(30%) + structure(30%)",,,,
+bearScore,"adx, dxy, close, ema50, ema200","composite score: trend(40%) + momentum(30%) + structure(30%)",,,,
+rangeScore,"adx, atr, volatility","composite score: adx(40%) + atr(30%) + volatility(30%)",,,,
+biasLabel,"bullScore, bearScore, rangeScore","max(bullScore,bearScore,rangeScore) mapped to label",,,,
+confidenceScore,"trendQuality, liqQuality, sessionQuality, analogScore","weighted composite",,,,
+trendScore,"adx, emaSpread, htfTrend","adx(40%) + ema(30%) + htf(30%)",,,,
+liqScore,"volume, volumeMA, spread","volume vs MA ratio adjusted by spread",,,,
+sessionScore,"time, asianRange, londonRange, nyRange","directional session quality scoring",,,,
+analogScore,"adx, atr, htfTrend, structure, liq, mr, correlation","7-dim continuous time-weighted",,,,
+structureScore,"orderBlocks, fvg, internalPivots, swingPivots","composite structure quality",,,,
+volumeScore,"volume, volumeMA, volumeProfile","normalized volume ratio",,,,
+momentumScore,"roc, rsi, macd","composite momentum",,,,

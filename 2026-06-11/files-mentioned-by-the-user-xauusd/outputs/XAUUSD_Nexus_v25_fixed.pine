@@ -1,0 +1,3254 @@
+//@version=5
+indicator(
+     "XAU/USD Institutional Liquidity Nexus v25.1 — Audit Fixed",
+     overlay=true,
+     max_lines_count=500,
+     max_labels_count=500,
+     max_boxes_count=500,
+     max_bars_back=5000)
+
+//=====================================================================
+// v25 ELITE INSTITUTIONAL TERMINAL
+//
+// PHASE 1 — Regime-Dynamic Composite Score
+//           Weights auto-select by detected regime (7 profiles).
+//           All component scores normalized 0-100 before weighting.
+//           Score is now version-stable and inflation-proof.
+//
+// PHASE 2 — Bias Confidence Engine
+//           New 4-level confidence metric: LOW/MEDIUM/HIGH/VERY HIGH
+//           Derived from HTF + Macro + Liquidity + Vol + Execution.
+//           Replaces misleading "probability" labels with honest "Bias".
+//
+// PHASE 3 — Real Trade Tracking Engine
+//           Entry/Stop/Target/Direction/R-Multiple tracked per trade.
+//           Equity curve from actual tracked PnL, not EV formula.
+//           Circular expectancyMult removed; replaced by regime mult.
+//           Sharpe proxy, max consecutive wins/losses computed.
+//
+// PHASE 4 — Prop Firm Engine 2.0
+//           Four-state risk engine: SAFE/CAUTION/RESTRICTED/LOCKDOWN
+//           Risk reduction: 100% / 75% / 50% / 0% (no signals).
+//           LOCKDOWN suppresses signal generation entirely.
+//           Trailing drawdown added alongside daily/weekly/max DD.
+//
+// PHASE 5 — Signal Quality Filter v2
+//           Rejects signals when: Execution < B OR BiasConf LOW
+//           OR MacroConflict Severe OR RiskState LOCKDOWN
+//           OR Corr Breakdown active.
+//           signalQualityScore 0-100 computed and gated.
+//
+// PHASE 6 — Dashboard Elite Redesign
+//           Top: 3 rows compact — larger readable text, tighter cells.
+//           Bottom: horizontal strip trade plan.
+//           All labels descriptive, no abbreviations.
+//           Text size: size.small on desktop (was size.tiny) for labels.
+//
+// All v24b features preserved. Zero repaint architecture maintained.
+//=====================================================================
+
+//=====================================================================
+// INSTITUTIONAL COLOR PALETTE
+//=====================================================================
+
+color cBull        = color.new(#10B981, 0)
+color cBullSoft    = color.new(#10B981, 70)
+color cBullBg      = color.new(#10B981, 92)
+color cBullGlow    = color.new(#10B981, 97)
+
+color cBear        = color.new(#DC2626, 0)
+color cBearSoft    = color.new(#DC2626, 70)
+color cBearBg      = color.new(#DC2626, 92)
+color cBearGlow    = color.new(#DC2626, 97)
+
+color cNeutral     = color.new(#94A3B8, 0)
+color cNeutralSoft = color.new(#94A3B8, 80)
+color cWarning     = color.new(#F59E0B, 0)
+color cForecast    = color.new(#06B6D4, 0)
+color cForecastSoft= color.new(#06B6D4, 85)
+color cPremium     = color.new(#EF4444, 0)
+color cDiscount    = color.new(#22C55E, 0)
+color cPurple      = color.new(#8B5CF6, 0)
+color cTeal        = color.new(#14B8A6, 0)
+
+color cBgDark      = color.new(#0F172A, 5)
+color cBgPanel     = color.new(#1E293B, 10)
+color cBgHeader    = color.new(#0F172A, 0)
+color cBorder      = color.new(#334155, 0)
+color cTextPrimary = color.new(#F1F5F9, 0)
+color cTextMuted   = color.new(#94A3B8, 0)
+color cTextDim     = color.new(#64748B, 0)
+
+color cRisk        = color.new(#EF4444, 0)
+color cTarget      = color.new(#10B981, 0)
+
+color cGrpMacro    = color.new(#78350F, 0)
+color cGrpStruct   = color.new(#134E4A, 0)
+color cGrpHTF      = color.new(#3B0764, 0)
+color cGrpExec     = color.new(#14532D, 0)
+color cGrpFuture   = color.new(#1E3A5F, 0)
+color cGrpSep      = color.new(#475569, 0)
+
+color cTierS       = color.new(#F8FAFC, 0)
+color cTierA       = color.new(#FBBF24, 0)
+color cTierB       = color.new(#F8FAFC, 0)
+color cTierC       = color.new(#64748B, 0)
+
+color cRegTrendExp = color.new(#10B981, 0)
+color cRegTrendCon = color.new(#34D399, 0)
+color cRegTrendExh = color.new(#F59E0B, 0)
+color cRegRangeAcc = color.new(#3B82F6, 0)
+color cRegRangeDis = color.new(#8B5CF6, 0)
+color cRegVolComp  = color.new(#64748B, 0)
+color cRegVolExp   = color.new(#DC2626, 0)
+
+color cPropSafe    = color.new(#10B981, 0)
+color cPropWarn    = color.new(#F59E0B, 0)
+color cPropDanger  = color.new(#DC2626, 0)
+
+color cCorrStrong   = color.new(#10B981, 0)
+color cCorrModerate = color.new(#F59E0B, 0)
+color cCorrWeak     = color.new(#64748B, 0)
+color cCorrBroken   = color.new(#DC2626, 0)
+color cMSS          = color.new(#F97316, 0)
+color cComposite    = color.new(#8B5CF6, 0)
+color cNewsRisk     = color.new(#EF4444, 0)
+
+//=====================================================================
+// MODULES
+//=====================================================================
+
+grpModules = "MODULES"
+
+ultraLight       = input.bool(false, "Ultra Light Mode",                  group=grpModules)
+showDashboard    = input.bool(true,  "Dashboard",                          group=grpModules)
+showForecast     = input.bool(true,  "Forecast Engine",                    group=grpModules)
+showVWAP         = input.bool(true,  "VWAP",                               group=grpModules)
+showLiquidity    = input.bool(true,  "PDH / PDL / PWH / PWL",             group=grpModules)
+showSR           = input.bool(true,  "Support / Resistance",               group=grpModules)
+showSessions     = input.bool(true,  "Sessions",                           group=grpModules)
+showEQ           = input.bool(true,  "EQH / EQL",                         group=grpModules)
+showSignals      = input.bool(true,  "Signals",                            group=grpModules)
+showFVG          = input.bool(true,  "Fair Value Gaps",                    group=grpModules)
+showOB           = input.bool(true,  "Order Blocks",                       group=grpModules)
+showSMT          = input.bool(true,  "SMT Divergence",                     group=grpModules)
+showAsian        = input.bool(true,  "Asian Sweeps",                       group=grpModules)
+showClimax       = input.bool(true,  "Volume Climax",                      group=grpModules)
+showAdaptiveATR  = input.bool(true,  "Adaptive ATR Regime",                group=grpModules)
+showHeatmap      = input.bool(true,  "Liquidity Heatmap",                  group=grpModules)
+showDisplacement = input.bool(true,  "Displacement Candles",               group=grpModules)
+showForecastCone = input.bool(true,  "Volatility Band Cone",               group=grpModules)
+showIntExtLiq    = input.bool(true,  "Internal/External Liquidity",        group=grpModules)
+showManipProb    = input.bool(true,  "Session Manipulation Probability",   group=grpModules)
+showSMTMatrix    = input.bool(true,  "SMT Multi-Asset Matrix",             group=grpModules)
+showSmartAlerts  = input.bool(true,  "Smart Alert Framework",              group=grpModules)
+showPremiumDisc  = input.bool(true,  "Premium/Discount Zones",             group=grpModules)
+showVolStates    = input.bool(true,  "AI Volatility States",               group=grpModules)
+mobileMode       = input.bool(false, "Compact Mobile Dashboard",           group=grpModules)
+showRisk         = input.bool(false, "Risk Framework",                     group=grpModules)
+showHTF          = input.bool(true,  "HTF Trend Stack",                    group=grpModules)
+showKillzone     = input.bool(true,  "ICT Killzone Weighting",             group=grpModules)
+showMob5M        = input.bool(true,  "Mobile: Show 5M Trend Column",      group=grpModules)
+showCTier        = input.bool(true,  "Show C-Grade Early Warning Signals", group=grpModules)
+showFibTargets   = input.bool(true,  "Fibonacci Extension Targets",        group=grpModules)
+showCorrHealth   = input.bool(true,  "Correlation Health Check",           group=grpModules)
+showHTFHeatmap   = input.bool(true,  "HTF Confluence Heatmap (5M-1D)",     group=grpModules)
+
+perfMode         = input.bool(false, "Institutional Performance Mode",     group=grpModules)
+showAnalytics    = input.bool(true,  "Trade Analytics Engine",             group=grpModules)
+showExpectancy   = input.bool(true,  "Expectancy Engine",                  group=grpModules)
+showRegime20     = input.bool(true,  "Market Regime Engine 2.0",           group=grpModules)
+showExecScore    = input.bool(true,  "Execution Quality Engine",           group=grpModules)
+showPropMode     = input.bool(false, "Prop Firm Mode",                     group=grpModules)
+
+grpV19 = "V19 ULTIMATE ENHANCEMENTS"
+showMacroExpanded = input.bool(false, "Cross-Asset Panel + Core Asset Matrix (DXY/BTC/Silver) — Optional", tooltip="Enable to load DXY, BTC, Silver, Oil, USDJPY, Real Yield feeds. Required for Core Asset Matrix in Row 3 of the dashboard. Adds ~6 security() calls.", group=grpV19)
+showCorrMatrix    = input.bool(false, "Correlation Matrix (8 assets) — Optional",              group=grpV19)
+showAnalyticsPanel= input.bool(false, "Analytics Panel (Win Rate/P/F/Expectancy) — Optional",  group=grpV19)
+showMSS           = input.bool(true,  "Market Structure Shift (MSS)",              group=grpV19)
+showStructScore   = input.bool(true,  "Structure Score (0-100)",                   group=grpV19)
+showFlowScore     = input.bool(true,  "Order Flow Score (0-100)",                  group=grpV19)
+showLiqMagnet     = input.bool(true,  "Liquidity Magnet Engine",                   group=grpV19)
+showProbModel     = input.bool(true,  "Probability Model (heuristic)",             group=grpV19)
+showComposite     = input.bool(true,  "Institutional Composite Score 2.0",         group=grpV19)
+showFuturePath    = input.bool(true,  "Future Path Model",                         group=grpV19)
+showExecEnhanced  = input.bool(true,  "Enhanced Execution Quality (7 factors)",    group=grpV19)
+
+grpNews = "NEWS RISK ENGINE (Manual Input)"
+newsRiskLevel  = input.int(0, "News Risk Level", options=[0, 1, 2, 3], tooltip="0=Low | 1=Moderate (CPI/PPI/NFP) | 2=High (FOMC) | 3=Extreme", group=grpNews)
+newsHoursUntil = input.int(0, "Hours Until Next Event", minval=0, maxval=24, group=grpNews)
+newsEventType  = input.string("NONE", "Event Type", options=["NONE", "CPI", "PPI", "NFP", "FOMC", "ISM", "CLAIMS", "RETAIL", "TREASURY", "SPEECH"], group=grpNews)
+
+//=====================================================================
+// CORE INPUTS
+//=====================================================================
+
+grpCore = "CORE"
+
+ema20Len      = input.int(20,  "EMA20",                  group=grpCore)
+ema50Len      = input.int(50,  "EMA50",                  group=grpCore)
+ema200Len     = input.int(200, "EMA200",                 group=grpCore)
+atrLen        = input.int(14,  "ATR Base",               group=grpCore)
+adxLen        = input.int(14,  "ADX",                    group=grpCore)
+adxThreshold  = input.int(25,  "ADX Threshold",          group=grpCore)
+rsiLen        = input.int(14,  "RSI Length",    minval=2, maxval=50, group=grpCore)
+pivotLen      = input.int(3,   "Pivot Length",  minval=2, maxval=10, group=grpCore)
+forecastBars  = input.int(18,  "Forecast Bars", minval=5, maxval=50, group=grpCore)
+maxZoneBars   = input.int(25,  "Zone Length",   minval=10,maxval=100,group=grpCore)
+recentBarsLen = input.int(120, "Signal Lookback Bars", minval=50, maxval=500, group=grpCore)
+trendThreshold= input.int(60,  "Trend Score Threshold", minval=50, maxval=90, step=5, group=grpCore)
+volClimaxPerc = input.int(95,  "Volume Climax Percentile", minval=90, maxval=99, step=1, group=grpCore)
+eqAtrMult     = input.float(0.25,"EQ Tolerance (ATR mult)", minval=0.05, maxval=1.0, step=0.05, group=grpCore)
+smtLookback   = input.int(50,  "SMT Lookback",  minval=20, maxval=200, group=grpCore)
+volLookback   = input.int(50,  "Volume Climax Lookback", minval=20, maxval=100, group=grpCore)
+
+grpV11 = "V11 INTELLIGENCE"
+
+dispMult         = input.float(2.5, "Displacement Multiplier",  minval=1.5, maxval=5.0, step=0.1, group=grpV11)
+coneConfidence   = input.float(0.68,"Volatility Band Width (0=wide, 0.95=narrow)", minval=0.5, maxval=0.95, step=0.01, group=grpV11)
+liqClusterThresh = input.float(0.3, "Liquidity Cluster Threshold (ATR)", minval=0.1, maxval=1.0, step=0.1, group=grpV11)
+manipThreshold   = input.float(1.5, "Manipulation Volume Threshold", minval=1.0, maxval=3.0, step=0.1, group=grpV11)
+premiumBandMult  = input.float(1.0, "Premium/Discount Band (ATR)", minval=0.5, maxval=2.0, step=0.1, group=grpV11)
+killzoneBoost    = input.float(1.2, "Killzone Confidence Boost", minval=1.0, maxval=1.5, step=0.1, group=grpV11)
+macroTF          = input.timeframe("60", "Macro Correlation Timeframe", group=grpV11)
+
+grpRisk = "RISK FRAMEWORK"
+
+riskMultiplier = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, group=grpRisk)
+rewardRatio    = input.float(2.0, "Reward:Risk Ratio",        minval=1.0, maxval=5.0, step=0.5, group=grpRisk)
+signalCooldown = input.int(5,    "Signal Cooldown (bars)",    minval=1,   maxval=20,             group=grpRisk)
+minConfluence  = input.int(30,   "Min Confluence % for Signal",minval=10, maxval=70, step=10,    group=grpRisk)
+accountSize    = input.float(10000,"Account Size ($)",         minval=1000,                       group=grpRisk)
+riskPerTrade   = input.float(1.0, "Risk Per Trade %",          minval=0.1, maxval=5.0, step=0.1, group=grpRisk)
+
+grpV17 = "V17 PREDICTIVE ENHANCEMENTS"
+
+confirmationBars   = input.int(2,    "Signal Confirmation Bars",         minval=1, maxval=5,           group=grpV17)
+dxyRocLen          = input.int(10,   "DXY Momentum ROC Length (bars)",   minval=5, maxval=30,           group=grpV17)
+useRsiDivFilter    = input.bool(true,"RSI Divergence Filter",                                            group=grpV17)
+rsiDivLookback     = input.int(14,   "RSI Divergence Lookback",          minval=5, maxval=30,           group=grpV17)
+corrHealthBars     = input.int(10,   "Correlation Break Lookback (bars)",minval=5, maxval=20,           group=grpV17)
+enableAdaptiveWts  = input.bool(true,"Adaptive Scoring by Regime",                                      group=grpV17)
+tierSThresh        = input.int(75,   "S-Tier Confidence Threshold",      minval=65, maxval=95, step=5,  group=grpV17)
+tierAThresh        = input.int(65,   "A-Tier Confidence Threshold",      minval=55, maxval=80, step=5,  group=grpV17)
+staleFeedBars      = input.int(10,   "Stale Feed Threshold (bars)",      minval=5,  maxval=30,          group=grpV17)
+decayBars          = input.int(10,   "Signal Staleness Decay Start (bars)",minval=5, maxval=30,         group=grpV17)
+fibT1Level         = input.float(0.618,"Fib Target T1 Level",            minval=0.382,maxval=1.0,step=0.001,group=grpV17)
+fibT2Level         = input.float(1.0,  "Fib Target T2 Level",            minval=0.618,maxval=1.5,step=0.001,group=grpV17)
+fibT3Level         = input.float(1.618,"Fib Target T3 Level",            minval=1.0,  maxval=2.5,step=0.001,group=grpV17)
+znRocLen           = input.int(10,   "ZN1 Rate Pressure ROC Length",     minval=5, maxval=20,           group=grpV17)
+
+grpV18 = "V18 ELITE ENHANCEMENTS"
+
+perfReduceVis    = input.bool(true,  "Perf Mode: Reduce Non-Essential Visuals", group=grpV18)
+perfSkipHeavy    = input.bool(true,  "Perf Mode: Skip Heavy Object Rendering",  group=grpV18)
+analyticsWinBars = input.int(100, "Max Trade History (bars)", minval=50, maxval=500, group=grpV18)
+regimeLookback   = input.int(20,  "Regime Detection Lookback",  minval=10, maxval=50, group=grpV18)
+volSpikeThresh   = input.float(2.5, "Volatility Spike Threshold (ATR mult)", minval=1.0, maxval=5.0, step=0.1, group=grpV18)
+tierSBaseRisk    = input.float(1.25, "S-Tier Base Risk %", minval=0.1, maxval=3.0, step=0.05, group=grpV18)
+tierABaseRisk    = input.float(1.00, "A-Tier Base Risk %", minval=0.1, maxval=3.0, step=0.05, group=grpV18)
+tierBBaseRisk    = input.float(0.50, "B-Tier Base Risk %", minval=0.1, maxval=3.0, step=0.05, group=grpV18)
+tierCBaseRisk    = input.float(0.25, "C-Tier Base Risk %", minval=0.1, maxval=3.0, step=0.05, group=grpV18)
+propDailyLimit   = input.float(5.0, "Prop: Daily Drawdown Limit %",  minval=1.0, maxval=10.0, step=0.5, group=grpV18)
+propWeeklyLimit  = input.float(10.0, "Prop: Weekly Drawdown Limit %", minval=2.0, maxval=20.0, step=0.5, group=grpV18)
+propMaxLimit     = input.float(12.0, "Prop: Max Drawdown Limit %",    minval=5.0, maxval=20.0, step=0.5, group=grpV18)
+propOnlyHighTier = input.bool(true, "Prop: Only A/S Tier Near Limit", group=grpV18)
+execLiqWeight    = input.float(25.0, "Exec: Liquidity Distance Weight", minval=5, maxval=50, step=5, group=grpV18)
+execVwapWeight   = input.float(20.0, "Exec: VWAP Distance Weight",      minval=5, maxval=50, step=5, group=grpV18)
+execHTFWeight    = input.float(25.0, "Exec: HTF Alignment Weight",      minval=5, maxval=50, step=5, group=grpV18)
+execZoneWeight   = input.float(15.0, "Exec: Premium/Discount Weight",   minval=5, maxval=50, step=5, group=grpV18)
+execSessionWeight= input.float(15.0, "Exec: Session Quality Weight",    minval=5, maxval=50, step=5, group=grpV18)
+
+grpV19c = "V19 CORRELATION"
+corrShortLen  = input.int(30,  "Corr Short Window",  minval=10, maxval=50,  group=grpV19c)
+corrMedLen    = input.int(60,  "Corr Medium Window", minval=30, maxval=100, group=grpV19c)
+corrLongLen   = input.int(120, "Corr Long Window",   minval=60, maxval=200, group=grpV19c)
+
+//=====================================================================
+// CORE ENGINE
+//=====================================================================
+
+ema20  = ta.ema(close, ema20Len)
+ema50  = ta.ema(close, ema50Len)
+ema200 = ta.ema(close, ema200Len)
+
+atr    = ta.atr(atrLen)
+
+[diplus, diminus, adxVal] = ta.dmi(adxLen, adxLen)
+
+vwapVal = ta.vwap(hlc3)
+
+rsiVal = ta.rsi(close, rsiLen)
+
+volSma20  = ta.sma(volume, 20)
+volSma50  = ta.sma(volume, 50)
+highVolume = volume > volSma20
+
+recentBars = bar_index > last_bar_index - recentBarsLen
+
+ema20Slope = ema20 - ema20[5]
+ema50Slope = ema50 - ema50[5]
+
+goldRet = close / nz(close[1], close) - 1
+
+//=====================================================================
+// HTF TREND STACK — 5M / 15M / 1H / 4H / 1D (zero repaint via [1])
+//=====================================================================
+
+[htf5mClose,  htf5mEma20,  htf5mEma50,  htf5mEma200] =
+     request.security(syminfo.tickerid, "5",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf15mClose, htf15mEma20, htf15mEma50, htf15mEma200] =
+     request.security(syminfo.tickerid, "15",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf1hClose,  htf1hEma20,  htf1hEma50,  htf1hEma200] =
+     request.security(syminfo.tickerid, "60",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf4hClose,  htf4hEma20,  htf4hEma50,  htf4hEma200] =
+     request.security(syminfo.tickerid, "240",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htfDClose,   htfDEma20,   htfDEma50,   htfDEma200] =
+     request.security(syminfo.tickerid, "D",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+chartTFSeconds = timeframe.in_seconds()
+htf5mAvailable  = chartTFSeconds <= 300
+htf15mAvailable = chartTFSeconds <= 900
+htf1hAvailable  = chartTFSeconds <= 3600
+htf4hAvailable  = chartTFSeconds <= 14400
+htfDAvailable   = chartTFSeconds <= 86400
+
+htfTrendScore(htfClose, htfEma20, htfEma50, htfEma200) =>
+    score = 0
+    score += (not na(htfClose) and not na(htfEma200) and htfClose > htfEma200) ? 40 : 0
+    score += (not na(htfEma20) and not na(htfEma50)  and htfEma20 > htfEma50)  ? 40 : 0
+    score += (not na(htfClose) and not na(htfEma20)  and htfClose > htfEma20)  ? 20 : 0
+    score
+
+htf5mScore  = htf5mAvailable  ? htfTrendScore(htf5mClose,  htf5mEma20,  htf5mEma50,  htf5mEma200) : 50
+htf15mScore = htf15mAvailable ? htfTrendScore(htf15mClose, htf15mEma20, htf15mEma50, htf15mEma200) : 50
+htf1hScore  = htf1hAvailable  ? htfTrendScore(htf1hClose,  htf1hEma20,  htf1hEma50,  htf1hEma200) : 50
+htf4hScore  = htf4hAvailable  ? htfTrendScore(htf4hClose,  htf4hEma20,  htf4hEma50,  htf4hEma200) : 50
+htfDScore   = htfDAvailable   ? htfTrendScore(htfDClose,   htfDEma20,   htfDEma50,   htfDEma200) : 50
+
+htf5mBull  = htf5mScore  >= 60
+htf5mBear  = htf5mScore  <= 40
+htf15mBull = htf15mScore >= 60
+htf15mBear = htf15mScore <= 40
+htf1hBull  = htf1hScore  >= 60
+htf1hBear  = htf1hScore  <= 40
+htf4hBull  = htf4hScore  >= 60
+htf4hBear  = htf4hScore  <= 40
+htfDBull   = htfDScore   >= 60
+htfDBear   = htfDScore   <= 40
+
+htfAlignmentLong  = (htf1hBull ? 1 : 0) + (htf4hBull ? 1 : 0) + (htfDBull ? 1 : 0)
+htfAlignmentShort = (htf1hBear ? 1 : 0) + (htf4hBear ? 1 : 0) + (htfDBear ? 1 : 0)
+
+htfBullGate = htfAlignmentLong  >= 2
+htfBearGate = htfAlignmentShort >= 2
+
+htfFullLong  = (htf5mBull  ? 1 : 0) + (htf15mBull ? 1 : 0) + (htf1hBull ? 1 : 0) + (htf4hBull ? 1 : 0) + (htfDBull ? 1 : 0)
+htfFullShort = (htf5mBear  ? 1 : 0) + (htf15mBear ? 1 : 0) + (htf1hBear ? 1 : 0) + (htf4hBear ? 1 : 0) + (htfDBear ? 1 : 0)
+
+//=====================================================================
+// ADAPTIVE ATR REGIME ENGINE
+//=====================================================================
+
+atrTrending = ta.atr(7)
+atrRanging  = ta.atr(21)
+
+_rawAdaptiveATR = showAdaptiveATR ? (adxVal > adxThreshold ? atrTrending : atrRanging) : atr
+adaptiveATR     = math.max(nz(_rawAdaptiveATR, ta.tr), 0.10)
+
+atrPercentile = ta.percentrank(adaptiveATR, 50)
+
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, 20, 2)
+bbWidth = (bbUpper - bbLower) / ema20
+bbWidthPercentile = ta.percentrank(bbWidth, 50)
+
+adxSlope = adxVal - adxVal[5]
+
+regimeTrending = adxVal > adxThreshold
+regimeRanging  = adxVal <= adxThreshold and adxVal > 15
+regimeDead     = adxVal <= 15
+
+regimeTextLegacy  = (regimeTrending ? "TRENDING" : regimeRanging ? "RANGING" : "DEAD")
+regimeColorLegacy = (regimeTrending ? cBull : regimeRanging ? cWarning : cNeutral)
+
+//=====================================================================
+// SESSION ENGINE
+//=====================================================================
+
+hourUTC = hour(time, "UTC")
+
+inAsian        = hourUTC >= 0  and hourUTC < 7
+inLondon       = hourUTC >= 7  and hourUTC < 16
+inNY           = hourUTC >= 13 and hourUTC < 21
+inLondonKZ     = hourUTC >= 8  and hourUTC < 11
+inLondonFixKZ  = hourUTC >= 10 and hourUTC < 11
+inNYKZ         = hourUTC >= 13 and hourUTC < 16
+inLondonCloseKZ= hourUTC >= 15 and hourUTC < 17
+inKillzone     = inLondonKZ or inNYKZ or inLondonCloseKZ or inLondonFixKZ
+
+sessionQuality = 0
+sessionQuality += inKillzone ? 40 : inLondon or inNY ? 25 : inAsian ? 10 : 0
+sessionQuality += inLondonFixKZ ? 20 : 0
+sessionQuality += inNYKZ ? 15 : 0
+sessionQuality += (not inAsian or inLondonKZ) ? 10 : 0
+sessionQuality += (inLondon and not inLondonKZ) ? 5 : 0
+
+bgcolor(showSessions and not perfMode ? (inLondon ? color.new(#F59E0B, 97) : inNY ? color.new(#3B82F6, 97) : inAsian ? color.new(#64748B, 98) : na) : na, title="Session Shading")
+
+
+//=====================================================================
+// MACRO ENGINE — core feeds (v18.1 baseline)
+//=====================================================================
+
+[_rawDXY, _rawDXYFast, _rawDXYSlow, _rawDXYRoc] =
+     request.security("TVC:DXY", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, dxyRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawYield, _rawYieldFast, _rawYieldSlow, _rawYieldRoc] =
+     request.security("CBOT:ZN1!", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, znRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawSilver, _rawSilverEMA] =
+     request.security("OANDA:XAGUSD", timeframe.period,
+          [close[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawEURUSD, _rawEURFast, _rawEURSlow, _rawEURRoc] =
+     request.security("OANDA:EURUSD", timeframe.period,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, znRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawSPX, _rawSPXFast, _rawSPXSlow] =
+     request.security("SP:SPX", timeframe.period,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+var float cachedDXY    = na
+var float cachedYield  = na
+var float cachedSilver = na
+var float cachedEURUSD = na
+var float cachedSPX    = na
+var int dxyStaleCount    = 0
+var int yieldStaleCount  = 0
+var int silverStaleCount = 0
+var int eurusdStaleCount = 0
+var int spxStaleCount    = 0
+
+if not na(_rawDXY)
+    cachedDXY     := _rawDXY
+    dxyStaleCount := 0
+else
+    dxyStaleCount := dxyStaleCount + 1
+if not na(_rawYield)
+    cachedYield    := _rawYield
+    yieldStaleCount := 0
+else
+    yieldStaleCount := yieldStaleCount + 1
+if not na(_rawSilver)
+    cachedSilver    := _rawSilver
+    silverStaleCount := 0
+else
+    silverStaleCount := silverStaleCount + 1
+if not na(_rawEURUSD)
+    cachedEURUSD    := _rawEURUSD
+    eurusdStaleCount := 0
+else
+    eurusdStaleCount := eurusdStaleCount + 1
+if not na(_rawSPX)
+    cachedSPX    := _rawSPX
+    spxStaleCount := 0
+else
+    spxStaleCount := spxStaleCount + 1
+
+dxyClose    = cachedDXY
+yieldClose  = cachedYield
+silverClose = cachedSilver
+eurusdClose = cachedEURUSD
+spxClose    = cachedSPX
+
+dxyValid    = not na(dxyClose) and not na(_rawDXYFast) and not na(_rawDXYSlow)
+yieldValid  = not na(yieldClose) and not na(_rawYieldFast) and not na(_rawYieldSlow)
+silverValid = not na(silverClose) and not na(_rawSilverEMA)
+eurusdValid = not na(eurusdClose) and not na(_rawEURFast) and not na(_rawEURSlow)
+spxValid    = not na(spxClose) and not na(_rawSPXFast) and not na(_rawSPXSlow)
+
+dxyStale    = dxyStaleCount    > staleFeedBars
+yieldStale  = yieldStaleCount  > staleFeedBars
+eurusdStale = eurusdStaleCount > staleFeedBars
+spxStale    = spxStaleCount    > staleFeedBars
+silverStale = silverStaleCount > staleFeedBars
+
+dxyEMAFast    = _rawDXYFast
+dxyEMASlow    = _rawDXYSlow
+yieldEMAFast  = _rawYieldFast
+yieldEMASlow  = _rawYieldSlow
+eurusdEMAFast = _rawEURFast
+eurusdEMASlow = _rawEURSlow
+spxEMAFast    = _rawSPXFast
+spxEMASlow    = _rawSPXSlow
+silverEMA     = _rawSilverEMA
+
+dxyBull = dxyValid and dxyClose > dxyEMAFast and dxyEMAFast > dxyEMASlow
+dxyBear = dxyValid and dxyClose < dxyEMAFast and dxyEMAFast < dxyEMASlow
+yieldRising  = yieldValid and yieldClose > yieldEMAFast and yieldEMAFast > yieldEMASlow
+yieldFalling = yieldValid and yieldClose < yieldEMAFast and yieldEMAFast < yieldEMASlow
+eurusdBull = eurusdValid and eurusdClose > eurusdEMAFast and eurusdEMAFast > eurusdEMASlow
+eurusdBear = eurusdValid and eurusdClose < eurusdEMAFast and eurusdEMAFast < eurusdEMASlow
+spxBull    = spxValid    and spxClose    > spxEMAFast    and spxEMAFast    > spxEMASlow
+spxBear    = spxValid    and spxClose    < spxEMAFast    and spxEMAFast    < spxEMASlow
+
+macroBullVotes = (dxyBear ? 1 : 0) + (yieldFalling ? 1 : 0) + (spxBull ? 1 : 0) + (eurusdBull ? 1 : 0)
+macroBearVotes = (dxyBull ? 1 : 0) + (yieldRising  ? 1 : 0) + (spxBear ? 1 : 0) + (eurusdBear ? 1 : 0)
+macroBull = macroBullVotes >= 3
+macroBear = macroBearVotes >= 3
+macroPressure = (macroBull ? "BULLISH MACRO (" + str.tostring(macroBullVotes) + "/4)" : macroBear ? "BEARISH MACRO (" + str.tostring(macroBearVotes) + "/4)" : "MIXED MACRO")
+
+dxyROC      = dxyValid ? nz(_rawDXYRoc, 0.0) : 0.0
+dxyMomBull  = dxyROC >  0.15
+dxyMomBear  = dxyROC < -0.15
+znROC          = yieldValid ? nz(_rawYieldRoc, 0.0) : 0.0
+eurusdROC      = eurusdValid ? nz(_rawEURRoc, 0.0) : 0.0
+ratePressure   = znROC + eurusdROC
+ratePressureBull = ratePressure >  0.1
+ratePressureBear = ratePressure < -0.1
+ratePressureText  = (ratePressureBull ? "BULLISH" : ratePressureBear ? "BEARISH" : "NEUTRAL")
+ratePressureColor = (ratePressureBull ? cBull : ratePressureBear ? cBear : cNeutral)
+
+goldBarDir    = close > close[1]  ? 1 : close < close[1]  ? -1 : 0
+dxyBarDir_raw = dxyValid ? (dxyClose > dxyClose[1] ? 1 : dxyClose < dxyClose[1] ? -1 : 0) : 0
+var int corrBreakCount = 0
+if goldBarDir == dxyBarDir_raw and goldBarDir != 0
+    corrBreakCount := corrBreakCount + 1
+else
+    corrBreakCount := 0
+corrBreakdown = showCorrHealth and corrBreakCount >= corrHealthBars
+
+//=====================================================================
+// V19 EXPANDED MACRO FEEDS: BTC / OIL / USDJPY / REAL-YIELD PROXY
+// FIX 2 continued: inlined cache pattern for expanded macro feeds
+//=====================================================================
+
+[_btcRequested, _rawBTCFast, _rawBTCSlow] =
+     request.security("BINANCE:BTCUSDT", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_oilRequested, _rawOilFast, _rawOilSlow] =
+     request.security("TVC:USOIL", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_jpyRequested, _rawJpyFast, _rawJpySlow] =
+     request.security("FX:USDJPY", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+_rawBTC    = showMacroExpanded ? _btcRequested : na
+_rawOil    = showMacroExpanded ? _oilRequested : na
+_rawUSDJPY = showMacroExpanded ? _jpyRequested : na
+_rawT10Y2Y = showMacroExpanded ? request.security("FRED:T10Y2Y",     "D", close[1], barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true) : na
+
+var float cachedBTC    = na
+var float cachedOil    = na
+var float cachedUSDJPY = na
+var float cachedT10Y2Y = na
+var int btcStaleCount    = 0
+var int oilStaleCount    = 0
+var int usdjpyStaleCount = 0
+var int t10y2yStaleCount = 0
+
+if not na(_rawBTC)
+    cachedBTC    := _rawBTC
+    btcStaleCount := 0
+else
+    btcStaleCount := btcStaleCount + 1
+if not na(_rawOil)
+    cachedOil    := _rawOil
+    oilStaleCount := 0
+else
+    oilStaleCount := oilStaleCount + 1
+if not na(_rawUSDJPY)
+    cachedUSDJPY    := _rawUSDJPY
+    usdjpyStaleCount := 0
+else
+    usdjpyStaleCount := usdjpyStaleCount + 1
+if not na(_rawT10Y2Y)
+    cachedT10Y2Y    := _rawT10Y2Y
+    t10y2yStaleCount := 0
+else
+    t10y2yStaleCount := t10y2yStaleCount + 1
+
+btcClose    = cachedBTC
+oilClose    = cachedOil
+usdjpyClose = cachedUSDJPY
+realYield   = cachedT10Y2Y
+
+btcValid    = not na(btcClose) and not na(_rawBTCFast) and not na(_rawBTCSlow)
+oilValid    = not na(oilClose) and not na(_rawOilFast) and not na(_rawOilSlow)
+usdjpyValid = not na(usdjpyClose) and not na(_rawJpyFast) and not na(_rawJpySlow)
+realYieldValid = not na(realYield)
+
+btcEMAFast    = _rawBTCFast
+btcEMASlow    = _rawBTCSlow
+oilEMAFast    = _rawOilFast
+oilEMASlow    = _rawOilSlow
+usdjpyEMAFast = _rawJpyFast
+usdjpyEMASlow = _rawJpySlow
+
+btcBull    = btcValid and btcClose > btcEMAFast and btcEMAFast > btcEMASlow
+btcBear    = btcValid and btcClose < btcEMAFast and btcEMAFast < btcEMASlow
+oilBull    = oilValid and oilClose > oilEMAFast and oilEMAFast > oilEMASlow
+oilBear    = oilValid and oilClose < oilEMAFast and oilEMAFast < oilEMASlow
+usdjpyBull = usdjpyValid and usdjpyClose > usdjpyEMAFast and usdjpyEMAFast > usdjpyEMASlow
+usdjpyBear = usdjpyValid and usdjpyClose < usdjpyEMAFast and usdjpyEMAFast < usdjpyEMASlow
+
+realYieldRising  = realYieldValid and realYield > nz(realYield[5], realYield)
+realYieldFalling = realYieldValid and realYield < nz(realYield[5], realYield)
+
+btcRet    = btcValid    ? btcClose    / nz(btcClose[1], btcClose) - 1 : 0.0
+oilRet    = oilValid    ? oilClose    / nz(oilClose[1], oilClose) - 1 : 0.0
+usdjpyRet = usdjpyValid ? usdjpyClose / nz(usdjpyClose[1], usdjpyClose) - 1 : 0.0
+silverRet = silverValid ? silverClose / nz(silverClose[1], silverClose) - 1 : 0.0
+dxyRet    = dxyValid    ? dxyClose    / nz(dxyClose[1], dxyClose) - 1 : 0.0
+yieldRet  = yieldValid  ? yieldClose  / nz(yieldClose[1], yieldClose) - 1 : 0.0
+eurRet    = eurusdValid ? eurusdClose / nz(eurusdClose[1], eurusdClose) - 1 : 0.0
+spxRet    = spxValid    ? spxClose    / nz(spxClose[1], spxClose) - 1 : 0.0
+
+//=====================================================================
+// CORRELATION MATRIX — 8 assets x 3 windows (v19)
+// All ta.correlation() calls unconditional (Pine requirement).
+// Validity gating applied after.
+//=====================================================================
+
+_ccGoldDXY_30  = ta.correlation(goldRet, dxyRet,    corrShortLen)
+_ccGoldDXY_60  = ta.correlation(goldRet, dxyRet,    corrMedLen)
+_ccGoldDXY_120 = ta.correlation(goldRet, dxyRet,    corrLongLen)
+_ccGoldYld_30  = ta.correlation(goldRet, yieldRet,  corrShortLen)
+_ccGoldYld_60  = ta.correlation(goldRet, yieldRet,  corrMedLen)
+_ccGoldYld_120 = ta.correlation(goldRet, yieldRet,  corrLongLen)
+_ccGoldSlv_30  = ta.correlation(goldRet, silverRet, corrShortLen)
+_ccGoldSlv_60  = ta.correlation(goldRet, silverRet, corrMedLen)
+_ccGoldSlv_120 = ta.correlation(goldRet, silverRet, corrLongLen)
+_ccGoldBTC_30  = ta.correlation(goldRet, btcRet,    corrShortLen)
+_ccGoldBTC_60  = ta.correlation(goldRet, btcRet,    corrMedLen)
+_ccGoldBTC_120 = ta.correlation(goldRet, btcRet,    corrLongLen)
+_ccGoldOil_30  = ta.correlation(goldRet, oilRet,    corrShortLen)
+_ccGoldOil_60  = ta.correlation(goldRet, oilRet,    corrMedLen)
+_ccGoldOil_120 = ta.correlation(goldRet, oilRet,    corrLongLen)
+_ccGoldSPX_30  = ta.correlation(goldRet, spxRet,    corrShortLen)
+_ccGoldSPX_60  = ta.correlation(goldRet, spxRet,    corrMedLen)
+_ccGoldSPX_120 = ta.correlation(goldRet, spxRet,    corrLongLen)
+_ccGoldEUR_30  = ta.correlation(goldRet, eurRet,    corrShortLen)
+_ccGoldEUR_60  = ta.correlation(goldRet, eurRet,    corrMedLen)
+_ccGoldEUR_120 = ta.correlation(goldRet, eurRet,    corrLongLen)
+_ccGoldJpy_30  = ta.correlation(goldRet, usdjpyRet, corrShortLen)
+_ccGoldJpy_60  = ta.correlation(goldRet, usdjpyRet, corrMedLen)
+_ccGoldJpy_120 = ta.correlation(goldRet, usdjpyRet, corrLongLen)
+
+corrGoldDXY_30  = dxyValid    ? _ccGoldDXY_30  : na
+corrGoldDXY_60  = dxyValid    ? _ccGoldDXY_60  : na
+corrGoldDXY_120 = dxyValid    ? _ccGoldDXY_120 : na
+corrGoldYld_30  = yieldValid  ? _ccGoldYld_30  : na
+corrGoldYld_60  = yieldValid  ? _ccGoldYld_60  : na
+corrGoldYld_120 = yieldValid  ? _ccGoldYld_120 : na
+corrGoldSlv_30  = silverValid ? _ccGoldSlv_30  : na
+corrGoldSlv_60  = silverValid ? _ccGoldSlv_60  : na
+corrGoldSlv_120 = silverValid ? _ccGoldSlv_120 : na
+corrGoldBTC_30  = btcValid    ? _ccGoldBTC_30  : na
+corrGoldBTC_60  = btcValid    ? _ccGoldBTC_60  : na
+corrGoldBTC_120 = btcValid    ? _ccGoldBTC_120 : na
+corrGoldOil_30  = oilValid    ? _ccGoldOil_30  : na
+corrGoldOil_60  = oilValid    ? _ccGoldOil_60  : na
+corrGoldOil_120 = oilValid    ? _ccGoldOil_120 : na
+corrGoldSPX_30  = spxValid    ? _ccGoldSPX_30  : na
+corrGoldSPX_60  = spxValid    ? _ccGoldSPX_60  : na
+corrGoldSPX_120 = spxValid    ? _ccGoldSPX_120 : na
+corrGoldEUR_30  = eurusdValid ? _ccGoldEUR_30  : na
+corrGoldEUR_60  = eurusdValid ? _ccGoldEUR_60  : na
+corrGoldEUR_120 = eurusdValid ? _ccGoldEUR_120 : na
+corrGoldJpy_30  = usdjpyValid ? _ccGoldJpy_30  : na
+corrGoldJpy_60  = usdjpyValid ? _ccGoldJpy_60  : na
+corrGoldJpy_120 = usdjpyValid ? _ccGoldJpy_120 : na
+
+avgCorrDXY = (nz(corrGoldDXY_30) + nz(corrGoldDXY_60) + nz(corrGoldDXY_120)) / 3.0
+avgCorrYld = (nz(corrGoldYld_30) + nz(corrGoldYld_60) + nz(corrGoldYld_120)) / 3.0
+avgCorrSlv = (nz(corrGoldSlv_30) + nz(corrGoldSlv_60) + nz(corrGoldSlv_120)) / 3.0
+avgCorrBTC = (nz(corrGoldBTC_30) + nz(corrGoldBTC_60) + nz(corrGoldBTC_120)) / 3.0
+avgCorrOil = (nz(corrGoldOil_30) + nz(corrGoldOil_60) + nz(corrGoldOil_120)) / 3.0
+avgCorrSPX = (nz(corrGoldSPX_30) + nz(corrGoldSPX_60) + nz(corrGoldSPX_120)) / 3.0
+avgCorrEUR = (nz(corrGoldEUR_30) + nz(corrGoldEUR_60) + nz(corrGoldEUR_120)) / 3.0
+avgCorrJpy = (nz(corrGoldJpy_30) + nz(corrGoldJpy_60) + nz(corrGoldJpy_120)) / 3.0
+
+stabDXY = math.abs(nz(corrGoldDXY_30) - nz(corrGoldDXY_120))
+stabYld = math.abs(nz(corrGoldYld_30) - nz(corrGoldYld_120))
+stabSlv = math.abs(nz(corrGoldSlv_30) - nz(corrGoldSlv_120))
+stabBTC = math.abs(nz(corrGoldBTC_30) - nz(corrGoldBTC_120))
+stabOil = math.abs(nz(corrGoldOil_30) - nz(corrGoldOil_120))
+stabSPX = math.abs(nz(corrGoldSPX_30) - nz(corrGoldSPX_120))
+stabEUR = math.abs(nz(corrGoldEUR_30) - nz(corrGoldEUR_120))
+stabJpy = math.abs(nz(corrGoldJpy_30) - nz(corrGoldJpy_120))
+avgStability = (stabDXY + stabYld + stabSlv + stabBTC + stabOil + stabSPX + stabEUR + stabJpy) / 8.0
+corrStabilityText  = avgStability < 0.2 ? "STABLE" : avgStability < 0.4 ? "MODERATE" : "UNSTABLE"
+corrStabilityColor = avgStability < 0.2 ? cCorrStrong : avgStability < 0.4 ? cCorrModerate : cCorrBroken
+
+corrHealthDXY = dxyValid    ? (avgCorrDXY < -0.3 ? 100 : avgCorrDXY < 0 ? 70 : avgCorrDXY < 0.3 ? 40 : 20) : 0
+corrHealthYld = yieldValid  ? (avgCorrYld < -0.3 ? 100 : avgCorrYld < 0 ? 70 : avgCorrYld < 0.3 ? 40 : 20) : 0
+corrHealthSlv = silverValid ? (avgCorrSlv > 0.3 ? 100 : avgCorrSlv > 0 ? 70 : avgCorrSlv > -0.3 ? 40 : 20) : 0
+corrHealthBTC = btcValid    ? (avgCorrBTC > 0.3 ? 100 : avgCorrBTC > 0 ? 70 : avgCorrBTC > -0.3 ? 40 : 20) : 0
+corrHealthOil = oilValid    ? (avgCorrOil > 0.3 ? 100 : avgCorrOil > 0 ? 70 : avgCorrOil > -0.3 ? 40 : 20) : 0
+corrHealthSPX = spxValid    ? (avgCorrSPX > 0.3 ? 100 : avgCorrSPX > 0 ? 70 : avgCorrSPX > -0.3 ? 40 : 20) : 0
+corrHealthEUR = eurusdValid ? (avgCorrEUR > 0.3 ? 100 : avgCorrEUR > 0 ? 70 : avgCorrEUR > -0.3 ? 40 : 20) : 0
+corrHealthJpy = usdjpyValid ? (avgCorrJpy < -0.3 ? 100 : avgCorrJpy < 0 ? 70 : avgCorrJpy > -0.3 ? 40 : 20) : 0
+avgCorrHealth = (corrHealthDXY + corrHealthYld + corrHealthSlv + corrHealthBTC + corrHealthOil + corrHealthSPX + corrHealthEUR + corrHealthJpy) / 8.0
+
+_wDXYr = math.min(math.abs(avgCorrDXY) * 100, 30)
+_wYldr = math.min(math.abs(avgCorrYld) * 100, 30)
+_wSlvr = math.min(math.abs(avgCorrSlv) * 100, 25)
+_wBTCr = math.min(math.abs(avgCorrBTC) * 100, 20)
+_wOilr = math.min(math.abs(avgCorrOil) * 100, 20)
+_wSPXr = spxValid    ? 15.0 : 0.0
+_wEURr = eurusdValid ? 20.0 : 0.0
+_wJpyr = math.min(math.abs(avgCorrJpy) * 100, 20)
+_wTot  = _wDXYr + _wYldr + _wSlvr + _wBTCr + _wOilr + _wSPXr + _wEURr + _wJpyr
+wDXY = _wTot > 0 ? _wDXYr / _wTot * 100 : 25.0
+wYld = _wTot > 0 ? _wYldr / _wTot * 100 : 20.0
+wSlv = _wTot > 0 ? _wSlvr / _wTot * 100 : 15.0
+wBTC = _wTot > 0 ? _wBTCr / _wTot * 100 : 10.0
+wOil = _wTot > 0 ? _wOilr / _wTot * 100 : 10.0
+wSPX = _wTot > 0 ? _wSPXr / _wTot * 100 : 15.0
+wEUR = _wTot > 0 ? _wEURr / _wTot * 100 : 20.0
+wJpy = _wTot > 0 ? _wJpyr / _wTot * 100 : 10.0
+
+msDXY = dxyValid    ? (dxyBear ? wDXY : dxyBull ? -wDXY : 0.0) : 0.0
+msYld = yieldValid  ? (yieldFalling ? wYld : yieldRising ? -wYld : 0.0) : 0.0
+msSPX = spxValid    ? (spxBull ? wSPX : spxBear ? -wSPX : 0.0) : 0.0
+msEUR = eurusdValid ? (eurusdBull ? wEUR : eurusdBear ? -wEUR : 0.0) : 0.0
+msSlv = silverValid ? (silverClose > silverEMA ? wSlv : silverClose < silverEMA ? -wSlv : 0.0) : 0.0
+msBTC = btcValid    ? (btcBull ? wBTC : btcBear ? -wBTC : 0.0) : 0.0
+msOil = oilValid    ? (oilBull ? wOil : oilBear ? -wOil : 0.0) : 0.0
+msJpy = usdjpyValid ? (usdjpyBear ? wJpy : usdjpyBull ? -wJpy : 0.0) : 0.0
+msRY  = realYieldValid ? (realYieldFalling ? 15.0 : realYieldRising ? -15.0 : 0.0) : 0.0
+msMom = dxyValid    ? (dxyMomBear ? 10.0 : dxyMomBull ? -10.0 : 0.0) : 0.0
+
+macroStrengthScore = int(math.max(math.min(msDXY + msYld + msSPX + msEUR + msSlv + msBTC + msOil + msJpy + msRY + msMom, 100), -100))
+macroStrengthText  = macroStrengthScore > 40 ? "STRONG BULLISH MACRO" : macroStrengthScore > 20 ? "BULLISH MACRO" : macroStrengthScore < -40 ? "STRONG BEARISH MACRO" : macroStrengthScore < -20 ? "BEARISH MACRO" : "NEUTRAL MACRO"
+macroStrengthColor = macroStrengthScore > 20 ? cBull : macroStrengthScore < -20 ? cBear : cNeutral
+macroStrengthConf  = math.abs(macroStrengthScore)
+
+//=====================================================================
+// WEIGHTED TREND ENGINE
+//=====================================================================
+
+bullTrendScore = 0
+bullTrendScore += close > ema200  ? 25 : 0
+bullTrendScore += ema20 > ema50   ? 25 : 0
+bullTrendScore += diplus > diminus ? 20 : 0
+bullTrendScore += adxVal > adxThreshold ? 20 : 0
+bullTrendScore += close > ema50   ? 10 : 0
+
+bearTrendScore = 0
+bearTrendScore += close < ema200  ? 25 : 0
+bearTrendScore += ema20 < ema50   ? 25 : 0
+bearTrendScore += diminus > diplus ? 20 : 0
+bearTrendScore += adxVal > adxThreshold ? 20 : 0
+bearTrendScore += close < ema50   ? 10 : 0
+
+bullTrend = bullTrendScore >= trendThreshold
+bearTrend = bearTrendScore >= trendThreshold
+
+emaSupertrendBull = close > ema20 and ema20 > ema50 and ema50 > ema200
+emaSupertrendBear = close < ema20 and ema20 < ema50 and ema50 < ema200
+emaSupertrendText = emaSupertrendBull ? "UPTREND" : emaSupertrendBear ? "DOWNTREND" : "MIXED"
+emaSupertrendColor = emaSupertrendBull ? cBull : emaSupertrendBear ? cBear : cWarning
+
+//=====================================================================
+// PIVOT ENGINE
+//=====================================================================
+
+pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLow  = ta.pivotlow(low,  pivotLen, pivotLen)
+
+var float activeResistance = na
+var float activeSupport    = na
+var float[] brokenResistances = array.new_float()
+var float[] brokenSupports    = array.new_float()
+var float   lastBrokenRes     = na
+var float   lastBrokenSup     = na
+
+bosResistanceSnap = activeResistance
+bosSupportSnap    = activeSupport
+
+if not na(pivotHigh)
+    if not na(activeResistance)
+        array.push(brokenResistances, activeResistance)
+        lastBrokenRes := activeResistance
+        if array.size(brokenResistances) > 20
+            array.shift(brokenResistances)
+    activeResistance := pivotHigh
+
+if not na(pivotLow)
+    if not na(activeSupport)
+        array.push(brokenSupports, activeSupport)
+        lastBrokenSup := activeSupport
+        if array.size(brokenSupports) > 20
+            array.shift(brokenSupports)
+    activeSupport := pivotLow
+
+if not na(activeResistance) and close > activeResistance and close[1] <= activeResistance[1] and volume > volSma20
+    array.push(brokenResistances, activeResistance)
+    lastBrokenRes := activeResistance
+    activeResistance := na
+    if array.size(brokenResistances) > 20
+        array.shift(brokenResistances)
+
+if not na(activeSupport) and close < activeSupport and close[1] >= activeSupport[1] and volume > volSma20
+    array.push(brokenSupports, activeSupport)
+    lastBrokenSup := activeSupport
+    activeSupport := na
+    if array.size(brokenSupports) > 20
+        array.shift(brokenSupports)
+
+resistanceLevel = activeResistance
+supportLevel    = activeSupport
+
+//=====================================================================
+// BOS / CHOCH
+//=====================================================================
+
+bullBOS = not na(bosResistanceSnap) and close > bosResistanceSnap and close[1] <= bosResistanceSnap[1] and bosResistanceSnap != lastBrokenRes and adxVal > adxThreshold and highVolume
+bearBOS = not na(bosSupportSnap)    and close < bosSupportSnap    and close[1] >= bosSupportSnap[1]    and bosSupportSnap  != lastBrokenSup  and adxVal > adxThreshold and highVolume
+
+bullCHOCH = bullBOS and bearTrend[1]
+bearCHOCH = bearBOS and bullTrend[1]
+
+bodySize    = math.abs(close - open)
+candleRange = high - low
+
+displacementUp   = showDisplacement and bodySize > adaptiveATR * dispMult and close > open and close > high[1] and candleRange > 0 and close >= (low + candleRange * 0.75)
+displacementDown = showDisplacement and bodySize > adaptiveATR * dispMult and close < open and close < low[1]  and candleRange > 0 and close <= (low + candleRange * 0.25)
+
+//=====================================================================
+// RSI DIVERGENCE FILTER
+//=====================================================================
+
+rsiBull    = ta.rsi(close, rsiLen)
+priceLL    = ta.lowest(low,   rsiDivLookback)
+priceHH    = ta.highest(high, rsiDivLookback)
+rsiLowest  = ta.lowest(rsiBull,  rsiDivLookback)
+rsiHighest = ta.highest(rsiBull, rsiDivLookback)
+
+bullRsiDiv = useRsiDivFilter ? (low <= priceLL * 1.001 and rsiBull > rsiLowest * 1.02) : true
+bearRsiDiv = useRsiDivFilter ? (high >= priceHH * 0.999 and rsiBull < rsiHighest * 0.98) : true
+
+//=====================================================================
+// STRUCTURE VISUALS
+//=====================================================================
+
+plotshape(showSignals and recentBars and barstate.isconfirmed and bullBOS and not (perfMode and perfReduceVis), style=shape.triangleup,   location=location.belowbar, color=cBull, size=size.small, title="Bull BOS")
+plotshape(showSignals and recentBars and barstate.isconfirmed and bearBOS and not (perfMode and perfReduceVis), style=shape.triangledown, location=location.abovebar, color=cBear, size=size.small, title="Bear BOS")
+plotshape(showSignals and recentBars and barstate.isconfirmed and bullCHOCH and not (perfMode and perfReduceVis), style=shape.diamond, location=location.belowbar, color=cForecast, size=size.small, title="Bull CHOCH")
+plotshape(showSignals and recentBars and barstate.isconfirmed and bearCHOCH and not (perfMode and perfReduceVis), style=shape.diamond, location=location.abovebar, color=cWarning,  size=size.small, title="Bear CHOCH")
+plotshape(displacementUp   and recentBars and barstate.isconfirmed and not (perfMode and perfReduceVis), style=shape.labelup,   location=location.belowbar, color=color.new(#3B82F6, 20), size=size.tiny, title="Displacement Up")
+plotshape(displacementDown and recentBars and barstate.isconfirmed and not (perfMode and perfReduceVis), style=shape.labeldown, location=location.abovebar, color=color.new(#8B5CF6, 20), size=size.tiny, title="Displacement Down")
+
+//=====================================================================
+// EQH / EQL
+//=====================================================================
+
+eqTolerance = adaptiveATR * eqAtrMult
+
+var float swingHigh1 = na
+var float swingHigh2 = na
+var float swingLow1  = na
+var float swingLow2  = na
+
+if not na(pivotHigh)
+    swingHigh2 := swingHigh1
+    swingHigh1 := pivotHigh
+if not na(pivotLow)
+    swingLow2 := swingLow1
+    swingLow1 := pivotLow
+
+equalHighs = not na(swingHigh1) and not na(swingHigh2) and math.abs(swingHigh1 - swingHigh2) <= eqTolerance
+equalLows  = not na(swingLow1)  and not na(swingLow2)  and math.abs(swingLow1  - swingLow2)  <= eqTolerance
+
+var bool eqhPlotted = false
+var bool eqlPlotted = false
+if equalHighs and not eqhPlotted
+    eqhPlotted := true
+if not equalHighs
+    eqhPlotted := false
+if equalLows and not eqlPlotted
+    eqlPlotted := true
+if not equalLows
+    eqlPlotted := false
+
+plotshape(showEQ and recentBars and equalHighs and not eqhPlotted[1] and not (perfMode and perfReduceVis), style=shape.circle, location=location.abovebar, color=cBear, size=size.tiny, title="EQH")
+plotshape(showEQ and recentBars and equalLows  and not eqlPlotted[1] and not (perfMode and perfReduceVis), style=shape.circle, location=location.belowbar, color=cBull, size=size.tiny, title="EQL")
+
+//=====================================================================
+// VOLUME CLIMAX
+//=====================================================================
+
+volPercentile = ta.percentrank(volume, volLookback)
+climaxUp   = showClimax and recentBars and volPercentile >= volClimaxPerc and close > open
+climaxDown = showClimax and recentBars and volPercentile >= volClimaxPerc and close < open
+
+//=====================================================================
+// FIX 5: EXPLICIT-PARAMETER QUALITY SCORE FUNCTIONS
+// Original versions captured bodySize, adaptiveATR, volPercentile,
+// htfBullGate etc. from the outer scope implicitly, making them
+// impossible to reason about or test in isolation.
+// All dependencies are now explicit parameters.
+//=====================================================================
+
+fvgQualityScore(bool isBull, float fvgGap, float atr_, float volPct_, bool htfBull_, bool htfBear_) =>
+    float disp = atr_ > 0 ? fvgGap / atr_ : 0.0
+    float s = 0.0
+    s += disp >= 2.5 ? 40.0 : disp >= 1.5 ? 30.0 : disp >= 1.0 ? 20.0 : disp >= 0.5 ? 10.0 : 0.0
+    s += volPct_ >= 90 ? 30.0 : volPct_ >= 75 ? 25.0 : volPct_ >= 60 ? 20.0 : volPct_ >= 40 ? 10.0 : 0.0
+    s += (isBull and htfBull_) or (not isBull and htfBear_) ? 20.0 : 0.0
+    s += 10.0   // base institutional presence bonus
+    int(math.min(s, 100))
+
+obQualityScore(bool isBull, float body_, float atr_, float volPct_, bool htfBull_, bool htfBear_, bool cUp_, bool cDn_, bool dUp_, bool dDn_) =>
+    float disp = atr_ > 0 ? body_ / atr_ : 0.0
+    float s = 0.0
+    s += disp >= 2.5 ? 35.0 : disp >= 1.5 ? 28.0 : disp >= 1.0 ? 20.0 : disp >= 0.5 ? 12.0 : 0.0
+    s += volPct_ >= 90 ? 30.0 : volPct_ >= 75 ? 24.0 : volPct_ >= 60 ? 18.0 : volPct_ >= 40 ? 10.0 : 0.0
+    s += (isBull and htfBull_) or (not isBull and htfBear_) ? 20.0 : 0.0
+    s += (isBull and (cUp_ or dUp_)) or (not isBull and (cDn_ or dDn_)) ? 15.0 : 0.0
+    int(math.min(s, 100))
+
+//=====================================================================
+// FAIR VALUE GAPS — quality scores use explicit-param function
+//=====================================================================
+
+var box[] bullFVGBoxes  = array.new_box(0)
+var box[] bearFVGBoxes  = array.new_box(0)
+var int[] bullFVGScores = array.new_int(0)
+var int[] bearFVGScores = array.new_int(0)
+
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+
+maxBoxesPerType = 20
+fvgRightEdge    = bar_index + 500
+
+if showFVG and bullFVG and recentBars and not ultraLight and not (perfMode and perfSkipHeavy)
+    if array.size(bullFVGBoxes) >= maxBoxesPerType
+        box.delete(array.shift(bullFVGBoxes))
+        array.shift(bullFVGScores)
+    fvgGap = low - high[2]
+    array.push(bullFVGBoxes, box.new(bar_index - 2, high[2], fvgRightEdge, low, bgcolor=color.new(#06B6D4, 95), border_color=color.new(#06B6D4, 85)))
+    array.push(bullFVGScores, fvgQualityScore(true, fvgGap, adaptiveATR, volPercentile, htfBullGate, htfBearGate))
+
+if showFVG and bearFVG and recentBars and not ultraLight and not (perfMode and perfSkipHeavy)
+    if array.size(bearFVGBoxes) >= maxBoxesPerType
+        box.delete(array.shift(bearFVGBoxes))
+        array.shift(bearFVGScores)
+    fvgGap = low[2] - high
+    array.push(bearFVGBoxes, box.new(bar_index - 2, high, fvgRightEdge, low[2], bgcolor=color.new(#DC2626, 95), border_color=color.new(#DC2626, 85)))
+    array.push(bearFVGScores, fvgQualityScore(false, fvgGap, adaptiveATR, volPercentile, htfBullGate, htfBearGate))
+
+if array.size(bullFVGBoxes) > 0 and not (perfMode and perfSkipHeavy)
+    for i = array.size(bullFVGBoxes) - 1 to 0
+        bx       = array.get(bullFVGBoxes, i)
+        boxTop   = math.max(box.get_top(bx), box.get_bottom(bx))
+        boxBot   = math.min(box.get_top(bx), box.get_bottom(bx))
+        boxLeft  = box.get_left(bx)
+        midPoint = (boxTop + boxBot) / 2
+        mitigated = bar_index > boxLeft and low <= midPoint
+        expired   = bar_index > box.get_right(bx)
+        if mitigated or expired
+            box.delete(bx)
+            array.remove(bullFVGBoxes, i)
+            array.remove(bullFVGScores, i)
+
+if array.size(bearFVGBoxes) > 0 and not (perfMode and perfSkipHeavy)
+    for i = array.size(bearFVGBoxes) - 1 to 0
+        bx       = array.get(bearFVGBoxes, i)
+        boxTop   = math.max(box.get_top(bx), box.get_bottom(bx))
+        boxBot   = math.min(box.get_top(bx), box.get_bottom(bx))
+        boxLeft  = box.get_left(bx)
+        midPoint = (boxTop + boxBot) / 2
+        mitigated = bar_index > boxLeft and high >= midPoint
+        expired   = bar_index > box.get_right(bx)
+        if mitigated or expired
+            box.delete(bx)
+            array.remove(bearFVGBoxes, i)
+            array.remove(bearFVGScores, i)
+
+//=====================================================================
+// ORDER BLOCKS — quality scores use explicit-param function
+//=====================================================================
+
+var box[] bullOBBoxes  = array.new_box(0)
+var box[] bearOBBoxes  = array.new_box(0)
+var int[] bullOBScores = array.new_int(0)
+var int[] bearOBScores = array.new_int(0)
+
+bullOB = close[1] < open[1] and close > high[1] and highVolume
+bearOB = close[1] > open[1] and close < low[1]  and highVolume
+
+obRightEdge = bar_index + 500
+
+if showOB and bullOB and recentBars and not ultraLight and not (perfMode and perfSkipHeavy)
+    if array.size(bullOBBoxes) >= maxBoxesPerType
+        box.delete(array.shift(bullOBBoxes))
+        array.shift(bullOBScores)
+    array.push(bullOBBoxes, box.new(bar_index - 1, high[1], obRightEdge, low[1], bgcolor=color.new(#10B981, 95), border_color=color.new(#10B981, 85)))
+    array.push(bullOBScores, obQualityScore(true, bodySize, adaptiveATR, volPercentile, htfBullGate, htfBearGate, climaxUp, climaxDown, displacementUp, displacementDown))
+
+if showOB and bearOB and recentBars and not ultraLight and not (perfMode and perfSkipHeavy)
+    if array.size(bearOBBoxes) >= maxBoxesPerType
+        box.delete(array.shift(bearOBBoxes))
+        array.shift(bearOBScores)
+    array.push(bearOBBoxes, box.new(bar_index - 1, math.max(open[1], close[1]), obRightEdge, math.min(open[1], close[1]), bgcolor=color.new(#DC2626, 95), border_color=color.new(#DC2626, 85)))
+    array.push(bearOBScores, obQualityScore(false, bodySize, adaptiveATR, volPercentile, htfBullGate, htfBearGate, climaxUp, climaxDown, displacementUp, displacementDown))
+
+if array.size(bullOBBoxes) > 0 and not (perfMode and perfSkipHeavy)
+    for i = array.size(bullOBBoxes) - 1 to 0
+        bx       = array.get(bullOBBoxes, i)
+        boxTop   = math.max(box.get_top(bx), box.get_bottom(bx))
+        boxBot   = math.min(box.get_top(bx), box.get_bottom(bx))
+        boxLeft  = box.get_left(bx)
+        midPoint = (boxTop + boxBot) / 2
+        mitigated = bar_index > boxLeft and close <= midPoint
+        expired   = bar_index > box.get_right(bx)
+        if mitigated or expired
+            box.delete(bx)
+            array.remove(bullOBBoxes, i)
+            array.remove(bullOBScores, i)
+
+if array.size(bearOBBoxes) > 0 and not (perfMode and perfSkipHeavy)
+    for i = array.size(bearOBBoxes) - 1 to 0
+        bx       = array.get(bearOBBoxes, i)
+        boxTop   = math.max(box.get_top(bx), box.get_bottom(bx))
+        boxBot   = math.min(box.get_top(bx), box.get_bottom(bx))
+        boxLeft  = box.get_left(bx)
+        midPoint = (boxTop + boxBot) / 2
+        mitigated = bar_index > boxLeft and close >= midPoint
+        expired   = bar_index > box.get_right(bx)
+        if mitigated or expired
+            box.delete(bx)
+            array.remove(bearOBBoxes, i)
+            array.remove(bearOBScores, i)
+
+//=====================================================================
+// FIX 6: GUARDED ULTRA-LIGHT / PERF CLEANUP
+// Previously ran every bar while in ultra-light mode.
+// Now uses a var bool edge-detect so it only fires on mode-change.
+//=====================================================================
+
+var bool _prevPerfClear = false
+bool _perfClearNow = ultraLight or (perfMode and perfSkipHeavy)
+
+if _perfClearNow and not _prevPerfClear
+    while array.size(bullFVGBoxes) > 0
+        box.delete(array.shift(bullFVGBoxes))
+    while array.size(bullFVGScores) > 0
+        array.shift(bullFVGScores)
+    while array.size(bearFVGBoxes) > 0
+        box.delete(array.shift(bearFVGBoxes))
+    while array.size(bearFVGScores) > 0
+        array.shift(bearFVGScores)
+    while array.size(bullOBBoxes) > 0
+        box.delete(array.shift(bullOBBoxes))
+    while array.size(bullOBScores) > 0
+        array.shift(bullOBScores)
+    while array.size(bearOBBoxes) > 0
+        box.delete(array.shift(bearOBBoxes))
+    while array.size(bearOBScores) > 0
+        array.shift(bearOBScores)
+
+_prevPerfClear := _perfClearNow
+
+//=====================================================================
+// SUPPORT / RESISTANCE
+//=====================================================================
+
+var line resistanceLine = na
+var line supportLine    = na
+
+priceNearResistance = not na(resistanceLevel) and math.abs(close - resistanceLevel) < adaptiveATR * 1.5
+priceNearSupport    = not na(supportLevel)    and math.abs(close - supportLevel)    < adaptiveATR * 1.5
+
+resLineColor = priceNearResistance ? cBear : color.new(#DC2626, 60)
+supLineColor = priceNearSupport    ? cBull : color.new(#10B981, 60)
+
+if barstate.islast and showSR
+    if not na(resistanceLevel)
+        if na(resistanceLine)
+            resistanceLine := line.new(bar_index, resistanceLevel, bar_index + 1, resistanceLevel, color=resLineColor, width=priceNearResistance ? 3 : 1, extend=extend.both)
+        else
+            line.set_y1(resistanceLine, resistanceLevel)
+            line.set_y2(resistanceLine, resistanceLevel)
+            line.set_color(resistanceLine, resLineColor)
+            line.set_width(resistanceLine, priceNearResistance ? 3 : 1)
+    else
+        if not na(resistanceLine)
+            line.delete(resistanceLine)
+            resistanceLine := na
+    if not na(supportLevel)
+        if na(supportLine)
+            supportLine := line.new(bar_index, supportLevel, bar_index + 1, supportLevel, color=supLineColor, width=priceNearSupport ? 3 : 1, extend=extend.both)
+        else
+            line.set_y1(supportLine, supportLevel)
+            line.set_y2(supportLine, supportLevel)
+            line.set_color(supportLine, supLineColor)
+            line.set_width(supportLine, priceNearSupport ? 3 : 1)
+    else
+        if not na(supportLine)
+            line.delete(supportLine)
+            supportLine := na
+
+var label resistanceLabel = na
+var label supportLabel    = na
+
+if barstate.islast and showSR
+    if not na(resistanceLevel)
+        if na(resistanceLabel)
+            resistanceLabel := label.new(bar_index + 5, resistanceLevel, "RESISTANCE", style=label.style_label_left, color=color.new(#DC2626, 20), textcolor=cTextPrimary, size=size.small)
+        else
+            label.set_x(resistanceLabel, bar_index + 5)
+            label.set_y(resistanceLabel, resistanceLevel)
+    else
+        if not na(resistanceLabel)
+            label.delete(resistanceLabel)
+            resistanceLabel := na
+    if not na(supportLevel)
+        if na(supportLabel)
+            supportLabel := label.new(bar_index + 5, supportLevel, "SUPPORT", style=label.style_label_left, color=color.new(#10B981, 20), textcolor=cTextPrimary, size=size.small)
+        else
+            label.set_x(supportLabel, bar_index + 5)
+            label.set_y(supportLabel, supportLevel)
+    else
+        if not na(supportLabel)
+            label.delete(supportLabel)
+            supportLabel := na
+
+//=====================================================================
+// HTF LIQUIDITY LEVELS — PDH / PDL / PWH / PWL
+//=====================================================================
+
+[_rawPDH, _rawPDL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[_rawPWH, _rawPWL] = request.security(syminfo.tickerid, "W", [high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_off)
+
+var float cachedPDH = na
+var float cachedPDL = na
+var float cachedPWH = na
+var float cachedPWL = na
+cachedPDH := na(_rawPDH) ? cachedPDH : _rawPDH
+cachedPDL := na(_rawPDL) ? cachedPDL : _rawPDL
+cachedPWH := na(_rawPWH) ? cachedPWH : _rawPWH
+cachedPWL := na(_rawPWL) ? cachedPWL : _rawPWL
+
+float liqPDH = cachedPDH
+float liqPDL = cachedPDL
+float liqPWH = cachedPWH
+float liqPWL = cachedPWL
+
+zoneMergeThreshold = adaptiveATR * liqClusterThresh
+showPDH = not na(liqPDH)
+showPWH = not na(liqPWH)
+showPDL = not na(liqPDL)
+showPWL = not na(liqPWL)
+pdhClusters = showPDH and not na(resistanceLevel) and math.abs(nz(liqPDH) - resistanceLevel) < zoneMergeThreshold
+
+var line pdhLine = na
+var line pdlLine = na
+var line pwhLine = na
+var line pwlLine = na
+
+if barstate.islast and showLiquidity
+    if showPDH
+        if na(pdhLine)
+            pdhLine := line.new(bar_index, liqPDH, bar_index + 1, liqPDH, color=pdhClusters ? color.new(#F59E0B, 0) : color.new(#F59E0B, 50), width=pdhClusters ? 2 : 1, extend=extend.both)
+        else
+            line.set_y1(pdhLine, liqPDH)
+            line.set_y2(pdhLine, liqPDH)
+            line.set_color(pdhLine, pdhClusters ? color.new(#F59E0B, 0) : color.new(#F59E0B, 50))
+            line.set_width(pdhLine, pdhClusters ? 2 : 1)
+    else
+        line.delete(pdhLine)
+        pdhLine := na
+    if showPDL
+        if na(pdlLine)
+            pdlLine := line.new(bar_index, liqPDL, bar_index + 1, liqPDL, color=color.new(#F59E0B, 50), width=1, extend=extend.both)
+        else
+            line.set_y1(pdlLine, liqPDL)
+            line.set_y2(pdlLine, liqPDL)
+    else
+        line.delete(pdlLine)
+        pdlLine := na
+    if showPWH
+        if na(pwhLine)
+            pwhLine := line.new(bar_index, liqPWH, bar_index + 1, liqPWH, color=color.new(#DC2626, 60), width=1, extend=extend.both)
+        else
+            line.set_y1(pwhLine, liqPWH)
+            line.set_y2(pwhLine, liqPWH)
+    else
+        line.delete(pwhLine)
+        pwhLine := na
+    if showPWL
+        if na(pwlLine)
+            pwlLine := line.new(bar_index, liqPWL, bar_index + 1, liqPWL, color=color.new(#10B981, 60), width=1, extend=extend.both)
+        else
+            line.set_y1(pwlLine, liqPWL)
+            line.set_y2(pwlLine, liqPWL)
+    else
+        line.delete(pwlLine)
+        pwlLine := na
+
+var label pdhLabel = na
+var label pdlLabel = na
+var label pwhLabel = na
+var label pwlLabel = na
+
+if barstate.islast and showLiquidity
+    if showPDH
+        if na(pdhLabel)
+            pdhLabel := label.new(bar_index + 5, liqPDH, "PDH", style=label.style_label_left, color=color.new(#F59E0B, 30), textcolor=cTextMuted, size=size.tiny)
+        else
+            label.set_x(pdhLabel, bar_index + 5)
+            label.set_y(pdhLabel, liqPDH)
+    else
+        label.delete(pdhLabel)
+        pdhLabel := na
+    if showPDL
+        if na(pdlLabel)
+            pdlLabel := label.new(bar_index + 5, liqPDL, "PDL", style=label.style_label_left, color=color.new(#F59E0B, 30), textcolor=cTextMuted, size=size.tiny)
+        else
+            label.set_x(pdlLabel, bar_index + 5)
+            label.set_y(pdlLabel, liqPDL)
+    else
+        label.delete(pdlLabel)
+        pdlLabel := na
+    if showPWH
+        if na(pwhLabel)
+            pwhLabel := label.new(bar_index + 5, liqPWH, "PWH", style=label.style_label_left, color=color.new(#DC2626, 40), textcolor=cTextMuted, size=size.tiny)
+        else
+            label.set_x(pwhLabel, bar_index + 5)
+            label.set_y(pwhLabel, liqPWH)
+    else
+        label.delete(pwhLabel)
+        pwhLabel := na
+    if showPWL
+        if na(pwlLabel)
+            pwlLabel := label.new(bar_index + 5, liqPWL, "PWL", style=label.style_label_left, color=color.new(#10B981, 40), textcolor=cTextMuted, size=size.tiny)
+        else
+            label.set_x(pwlLabel, bar_index + 5)
+            label.set_y(pwlLabel, liqPWL)
+    else
+        label.delete(pwlLabel)
+        pwlLabel := na
+
+//=====================================================================
+// INTERNAL / EXTERNAL LIQUIDITY
+//=====================================================================
+
+internalLiqSweepHigh = showIntExtLiq and recentBars and equalHighs and high > nz(swingHigh1) and close < nz(swingHigh1)
+internalLiqSweepLow  = showIntExtLiq and recentBars and equalLows  and low  < nz(swingLow1)  and close > nz(swingLow1)
+plotshape(internalLiqSweepHigh and not (perfMode and perfReduceVis), style=shape.triangledown, location=location.abovebar, color=color.new(#8B5CF6, 30), size=size.tiny, title="Internal Liq Sweep High")
+plotshape(internalLiqSweepLow and not (perfMode and perfReduceVis),  style=shape.triangleup,   location=location.belowbar, color=color.new(#06B6D4, 30), size=size.tiny, title="Internal Liq Sweep Low")
+
+//=====================================================================
+// SMT DIVERGENCE (gold vs silver)
+//=====================================================================
+
+goldPH    = ta.pivothigh(high,       pivotLen, pivotLen)
+goldPL    = ta.pivotlow(low,         pivotLen, pivotLen)
+_silverPH = ta.pivothigh(silverClose, pivotLen, pivotLen)
+_silverPL = ta.pivotlow(silverClose,  pivotLen, pivotLen)
+silverPH  = silverValid ? _silverPH : na
+silverPL  = silverValid ? _silverPL : na
+
+var float lastGoldPH   = na
+var float lastGoldPL   = na
+var float lastSilverPH = na
+var float lastSilverPL = na
+var float prevGoldPH   = na
+var float prevGoldPL   = na
+var float prevSilverPH = na
+var float prevSilverPL = na
+
+if not na(goldPH)
+    prevGoldPH := lastGoldPH
+    lastGoldPH := goldPH
+if not na(goldPL)
+    prevGoldPL := lastGoldPL
+    lastGoldPL := goldPL
+if not na(silverPH)
+    prevSilverPH := lastSilverPH
+    lastSilverPH := silverPH
+if not na(silverPL)
+    prevSilverPL := lastSilverPL
+    lastSilverPL := silverPL
+
+smtBearBase = showSMT and recentBars and not na(lastGoldPH) and not na(prevGoldPH) and not na(lastSilverPH) and not na(prevSilverPH) and lastGoldPH > prevGoldPH and lastSilverPH < prevSilverPH
+smtBullBase = showSMT and recentBars and not na(lastGoldPL) and not na(prevGoldPL) and not na(lastSilverPL) and not na(prevSilverPL) and lastGoldPL < prevGoldPL and lastSilverPL > prevSilverPL
+
+calcSMTScore() =>
+    float score = 0.0
+    if smtBullBase
+        score := score + 30.0
+        score := score + (dxyBear and eurusdBull ? 20.0 : 0.0)
+        score := score + (yieldFalling ? 20.0 : 0.0)
+        score := score + (spxValid and spxBull ? 10.0 : 0.0)
+    else if smtBearBase
+        score := score + 30.0
+        score := score + (dxyBull and eurusdBear ? 20.0 : 0.0)
+        score := score + (yieldRising ? 20.0 : 0.0)
+        score := score + (spxValid and spxBear ? 10.0 : 0.0)
+    score
+
+float smtCompositeScore = calcSMTScore()
+smtStrongBear = smtCompositeScore >= 50.0 and smtBearBase
+smtStrongBull = smtCompositeScore >= 50.0 and smtBullBase
+plotshape(smtStrongBear and not (perfMode and perfReduceVis), style=shape.triangledown, location=location.abovebar, color=color.new(#8B5CF6, 0), size=size.small, title="SMT Strong Bearish")
+plotshape(smtStrongBull and not (perfMode and perfReduceVis), style=shape.triangleup,   location=location.belowbar, color=color.new(#06B6D4, 0), size=size.small, title="SMT Strong Bullish")
+
+//=====================================================================
+// ASIAN SWEEPS
+//=====================================================================
+
+tfSeconds     = timeframe.in_seconds()
+asianLookback = tfSeconds >= 604800 ? 10 : tfSeconds >= 86400 ? 5 : math.max(5, math.round(25200 / tfSeconds))
+asianSessionHigh = ta.highest(high, asianLookback)
+asianSessionLow  = ta.lowest(low,   asianLookback)
+asianHighSweep = showAsian and recentBars and inLondon and high > asianSessionHigh[1] and close < asianSessionHigh[1]
+asianLowSweep  = showAsian and recentBars and inLondon and low  < asianSessionLow[1]  and close > asianSessionLow[1]
+plotshape(asianHighSweep and not (perfMode and perfReduceVis), style=shape.xcross, location=location.abovebar, color=color.new(#7C2D12, 0), size=size.tiny, title="Asian High Sweep")
+plotshape(asianLowSweep and not (perfMode and perfReduceVis),  style=shape.xcross, location=location.belowbar, color=color.new(#14532D, 0), size=size.tiny, title="Asian Low Sweep")
+plotshape(climaxUp and not (perfMode and perfReduceVis),   style=shape.circle, location=location.belowbar, color=color.new(#3B82F6, 30), size=size.small, title="Volume Climax Up")
+plotshape(climaxDown and not (perfMode and perfReduceVis), style=shape.circle, location=location.abovebar, color=color.new(#F59E0B, 30), size=size.small, title="Volume Climax Down")
+
+//=====================================================================
+// SESSION MANIPULATION PROBABILITY
+//=====================================================================
+
+asianRange    = asianSessionHigh - asianSessionLow
+manipVolume   = volume > volSma50 * manipThreshold
+asianRangeAvg = ta.sma(asianRange, 10)
+manipRange    = asianRange < asianRangeAvg * 0.7
+manipWick     = (high > asianSessionHigh and close < asianSessionHigh) or (low < asianSessionLow and close > asianSessionLow)
+manipScore = 0
+manipScore += manipVolume ? 40 : 0
+manipScore += manipRange  ? 30 : 0
+manipScore += manipWick   ? 30 : 0
+manipHigh = showManipProb and recentBars and manipScore >= 70
+plotshape(manipHigh and not (perfMode and perfReduceVis), style=shape.labeldown, location=location.abovebar, color=color.new(#64748B, 40), text="MANIP", textcolor=cTextPrimary, size=size.tiny, title="Manipulation Signal")
+
+//=====================================================================
+// PREMIUM / DISCOUNT ZONES
+//=====================================================================
+
+premiumZone  = showPremiumDisc and close > vwapVal + adaptiveATR * premiumBandMult
+discountZone = showPremiumDisc and close < vwapVal - adaptiveATR * premiumBandMult
+bgcolor(premiumZone ? color.new(#DC2626, 96) : discountZone ? color.new(#10B981, 96) : na, title="Premium/Discount Zone")
+
+//=====================================================================
+// AI VOLATILITY STATES
+//=====================================================================
+
+volStateAccumulation = showVolStates and not regimeTrending and volume < volSma20 and math.abs(close - open) < adaptiveATR * 0.5
+volStateMarkup       = showVolStates and regimeTrending and close > vwapVal and volume > volSma20
+volStateDistribution = showVolStates and regimeTrending and high > ema20 + adaptiveATR and volume < volSma20 * 0.8 and rsiVal > 70
+volStateMarkdown     = showVolStates and not regimeTrending and close < vwapVal and volume > volSma20 * 1.5
+aiStateText  = (volStateAccumulation ? "ACCUM" : volStateMarkup ? "MARKUP" : volStateDistribution ? "DIST" : volStateMarkdown ? "MARKDN" : "NEUTRAL")
+aiStateColor = (volStateAccumulation ? color.new(#3B82F6, 0) : volStateMarkup ? cBull : volStateDistribution ? cWarning : volStateMarkdown ? cBear : cNeutral)
+
+//=====================================================================
+// FIX 8: MARKET REGIME ENGINE 2.0
+// Original used a cascading "and not" chain — fragile to reordering.
+// Replaced with array max-index selection: fully order-independent.
+//=====================================================================
+
+scoreTrendExp = 0
+scoreTrendExp += regimeTrending and adxSlope > 0 ? 30 : 0
+scoreTrendExp += atrPercentile > 60 and atrPercentile > nz(ta.percentrank(adaptiveATR[1], 50), 0) ? 25 : 0
+scoreTrendExp += math.abs(ema20Slope) > adaptiveATR * 0.1 ? 20 : 0
+scoreTrendExp += (displacementUp or displacementDown) ? 15 : 0
+scoreTrendExp += highVolume ? 10 : 0
+
+scoreTrendCon = 0
+scoreTrendCon += regimeTrending and math.abs(adxSlope) < 3 ? 30 : 0
+scoreTrendCon += atrPercentile >= 30 and atrPercentile <= 70 ? 25 : 0
+scoreTrendCon += (ema20 > ema50 and ema20 > nz(ema20[1], ema20)) or (ema20 < ema50 and ema20 < nz(ema20[1], ema20)) ? 20 : 0
+scoreTrendCon += not (displacementUp or displacementDown) ? 15 : 0
+scoreTrendCon += highVolume ? 10 : 0
+
+scoreTrendExh = 0
+scoreTrendExh += regimeTrending and adxSlope < -2 ? 25 : 0
+scoreTrendExh += atrPercentile < nz(ta.percentrank(adaptiveATR[5], 50), 50) ? 25 : 0
+scoreTrendExh += (rsiVal > 70 or rsiVal < 30) ? 20 : 0
+scoreTrendExh += (climaxUp or climaxDown) ? 20 : 0
+scoreTrendExh += (bullCHOCH or bearCHOCH) ? 10 : 0
+
+scoreRangeAcc = 0
+scoreRangeAcc += regimeDead ? 25 : 0
+scoreRangeAcc += atrPercentile < 30 ? 25 : 0
+scoreRangeAcc += math.abs(close - vwapVal) < adaptiveATR * 0.5 ? 20 : 0
+scoreRangeAcc += volStateAccumulation ? 20 : 0
+scoreRangeAcc += bbWidthPercentile < 30 ? 10 : 0
+
+scoreRangeDis = 0
+scoreRangeDis += regimeDead or regimeRanging ? 20 : 0
+scoreRangeDis += atrPercentile < 30 ? 20 : 0
+scoreRangeDis += (premiumZone or discountZone) ? 25 : 0
+scoreRangeDis += volStateDistribution ? 25 : 0
+scoreRangeDis += (equalHighs or equalLows) ? 10 : 0
+
+scoreVolComp = 0
+scoreVolComp += atrPercentile < 20 ? 35 : 0
+scoreVolComp += bbWidthPercentile < 20 ? 35 : 0
+scoreVolComp += adxSlope < 0 ? 20 : 0
+scoreVolComp += volume < volSma20 * 0.8 ? 10 : 0
+
+scoreVolExp = 0
+scoreVolExp += atrPercentile > 80 ? 30 : 0
+scoreVolExp += bbWidthPercentile > 80 ? 30 : 0
+scoreVolExp += (displacementUp or displacementDown) ? 25 : 0
+scoreVolExp += adxSlope > 3 ? 15 : 0
+
+// FIX 8: array-based winner — no cascade, no order dependency
+var string[] _regimeNames  = array.from("TREND EXPANSION", "TREND CONTINUATION", "TREND EXHAUSTION", "RANGE ACCUMULATION", "RANGE DISTRIBUTION", "VOL COMPRESSION", "VOL EXPANSION")
+var color[]  _regimeColors = array.from(cRegTrendExp, cRegTrendCon, cRegTrendExh, cRegRangeAcc, cRegRangeDis, cRegVolComp, cRegVolExp)
+float[] _regimeScores = array.from(float(scoreTrendExp), float(scoreTrendCon), float(scoreTrendExh), float(scoreRangeAcc), float(scoreRangeDis), float(scoreVolComp), float(scoreVolExp))
+
+float _regimeMax    = array.max(_regimeScores)
+int   _regimeBest   = array.indexof(_regimeScores, _regimeMax)
+bool  _regimeValid  = _regimeMax >= 40
+
+regimeText20  = _regimeValid and _regimeBest >= 0 ? array.get(_regimeNames,  _regimeBest) : regimeTextLegacy
+regimeColor20 = _regimeValid and _regimeBest >= 0 ? array.get(_regimeColors, _regimeBest) : regimeColorLegacy
+
+// Derive individual boolean flags from the winner index (used downstream)
+isRegimeTrendExp = _regimeValid and _regimeBest == 0
+isRegimeTrendCon = _regimeValid and _regimeBest == 1
+isRegimeTrendExh = _regimeValid and _regimeBest == 2
+isRegimeRangeAcc = _regimeValid and _regimeBest == 3
+isRegimeRangeDis = _regimeValid and _regimeBest == 4
+isRegimeVolComp  = _regimeValid and _regimeBest == 5
+isRegimeVolExp   = _regimeValid and _regimeBest == 6
+
+regimeBosMult   = isRegimeTrendExp ? 1.3 : isRegimeTrendCon ? 1.2 : isRegimeTrendExh ? 0.7 : isRegimeVolExp ? 1.1 : 1.0
+regimeSmtMult   = isRegimeRangeAcc ? 1.3 : isRegimeRangeDis ? 1.3 : isRegimeTrendExp ? 0.8 : isRegimeTrendCon ? 0.9 : 1.0
+regimeLiqMult   = isRegimeTrendExh ? 1.3 : isRegimeVolExp ? 1.2 : isRegimeVolComp ? 1.1 : 1.0
+regimeMacroMult = isRegimeTrendExp ? 1.2 : isRegimeTrendCon ? 1.1 : isRegimeTrendExh ? 0.8 : 1.0
+regimeKillMult  = isRegimeTrendExp ? 1.15 : isRegimeTrendCon ? 1.1 : isRegimeTrendExh ? 0.85 : 1.0
+
+//=====================================================================
+// VOLATILITY SHIELD
+//=====================================================================
+
+volStateCalm      = atrPercentile < 30
+volStateNormal    = atrPercentile >= 30 and atrPercentile < 70
+volStateElevated  = atrPercentile >= 70 and atrPercentile < 90
+volStateExplosive = atrPercentile >= 90
+volShieldText  = (volStateExplosive ? "EXPLOSIVE" : volStateElevated ? "ELEVATED" : volStateNormal ? "NORMAL" : "CALM")
+volShieldColor = (volStateExplosive ? cBear : volStateElevated ? cWarning : volStateNormal ? cBull : cTeal)
+riskMultiplierDynamic = volStateExplosive ? riskMultiplier * 1.5 : volStateElevated ? riskMultiplier * 1.2 : riskMultiplier
+positionSizeFactor    = volStateExplosive ? 0.5 : volStateElevated ? 0.75 : 1.0
+volSpikeActive = adaptiveATR > ta.sma(adaptiveATR, 20) * volSpikeThresh
+
+//=====================================================================
+// ADAPTIVE SCORING WEIGHTS BY REGIME
+//=====================================================================
+
+wBOS_base  = enableAdaptiveWts ? (regimeTrending ? 20 : regimeRanging ? 15 : 10) : 15
+wDisp_base = enableAdaptiveWts ? (regimeTrending ? 15 : regimeRanging ? 10 : 6)  : 10
+wSMT_base  = enableAdaptiveWts ? (regimeTrending ? 8  : regimeRanging ? 12 : 15) : 10
+wEQ_base   = enableAdaptiveWts ? (regimeTrending ? 6  : regimeRanging ? 10 : 8)  : 10
+wBOS  = int(wBOS_base * regimeBosMult)
+wDisp = int(wDisp_base * (isRegimeVolExp ? 1.2 : 1.0))
+wSMT  = int(wSMT_base * regimeSmtMult)
+wEQ   = int(wEQ_base * regimeLiqMult)
+
+//=====================================================================
+// CONFLUENCE SCORE ENGINE
+//=====================================================================
+
+bullGroupA_raw = (bullTrend ? 15 : 0) + (htfAlignmentLong >= 2 ? 10 : 0) + (regimeTrending ? 5 : 0)
+bearGroupA_raw = (bearTrend ? 15 : 0) + (htfAlignmentShort >= 2 ? 10 : 0) + (regimeTrending ? 5 : 0)
+bullGroupA = math.min(float(bullGroupA_raw), 20.0)
+bearGroupA = math.min(float(bearGroupA_raw), 20.0)
+
+bullGroupB = (bullBOS ? wBOS : 0) + (displacementUp ? wDisp : 0) + (smtStrongBull ? wSMT : 0) + (equalLows ? wEQ : 0) + (macroBull and bullTrend ? int(10 * regimeMacroMult) : 0) + (asianLowSweep and bullTrend ? 10 : 0) + (highVolume ? 10 : 0) + (not manipHigh ? 10 : 0) + (inKillzone ? int(5 * regimeKillMult) : 0) + (ratePressureBull ? 5 : 0) + (dxyMomBear ? 5 : 0)
+bearGroupB = (bearBOS ? wBOS : 0) + (displacementDown ? wDisp : 0) + (smtStrongBear ? wSMT : 0) + (equalHighs ? wEQ : 0) + (macroBear and bearTrend ? int(10 * regimeMacroMult) : 0) + (asianHighSweep and bearTrend ? 10 : 0) + (highVolume ? 10 : 0) + (not manipHigh ? 10 : 0) + (inKillzone ? int(5 * regimeKillMult) : 0) + (ratePressureBear ? 5 : 0) + (dxyMomBull ? 5 : 0)
+bullConfluence = bullGroupA + bullGroupB
+bearConfluence = bearGroupA + bearGroupB
+float bullConfluenceCapped = math.min(bullConfluence, 100.0)
+float bearConfluenceCapped = math.min(bearConfluence, 100.0)
+confluenceScore  = math.max(bullConfluenceCapped, bearConfluenceCapped)
+confluenceRating = (confluenceScore >= 80 ? "STRONG" : confluenceScore >= 60 ? "MODERATE" : confluenceScore >= 40 ? "WEAK" : "NONE")
+confluenceColor  = (confluenceScore >= 80 ? cBull : confluenceScore >= 60 ? cTeal : confluenceScore >= 40 ? cWarning : cNeutral)
+bullNonTrendConfluence = (bullBOS ? 1 : 0) + (smtStrongBull ? 1 : 0) + (displacementUp ? 1 : 0) + (macroBull ? 1 : 0) + (asianLowSweep ? 1 : 0)
+bearNonTrendConfluence = (bearBOS ? 1 : 0) + (smtStrongBear ? 1 : 0) + (displacementDown ? 1 : 0) + (macroBear ? 1 : 0) + (asianHighSweep ? 1 : 0)
+bullHasNonTrendFactor  = bullNonTrendConfluence >= 1
+bearHasNonTrendFactor  = bearNonTrendConfluence >= 1
+
+var int lastLongSignalBar  = -999
+var int lastShortSignalBar = -999
+
+//=====================================================================
+// FORECAST ENGINE
+//=====================================================================
+
+bullScore = 0.0
+bearScore = 0.0
+bullScore += bullTrend ? 20 : 0
+bearScore += bearTrend ? 20 : 0
+bullScore += bullBOS ? 15 : 0
+bearScore += bearBOS ? 15 : 0
+bullScore += bullCHOCH ? 10 : 0
+bearScore += bearCHOCH ? 10 : 0
+bullScore += dxyBear ? 10 : 0
+bearScore += dxyBull ? 10 : 0
+bullScore += yieldFalling ? 10 : 0
+bearScore += yieldRising ? 10 : 0
+bullScore += displacementUp ? 8 : 0
+bearScore += displacementDown ? 8 : 0
+bullScore += manipHigh and asianLowSweep  ? 5 : 0
+bearScore += manipHigh and asianHighSweep ? 5 : 0
+bullScore += htfAlignmentLong >= 2 ? 10 : htfAlignmentLong >= 1 ? 5 : 0
+bearScore += htfAlignmentShort >= 2 ? 10 : htfAlignmentShort >= 1 ? 5 : 0
+bullScore += ratePressureBull ? 5 : 0
+bearScore += ratePressureBear ? 5 : 0
+
+macroContradiction = (macroStrengthScore > 30 and bearScore > bullScore) or (macroStrengthScore < -30 and bullScore > bearScore)
+forecastBull = bullScore > bearScore
+atrSafe = adaptiveATR
+forecastATR = atrSafe * math.sqrt(forecastBars)
+nearestResistance = not na(resistanceLevel) ? resistanceLevel : close + forecastATR * 3
+nearestSupport    = not na(supportLevel)    ? supportLevel    : close - forecastATR * 3
+forecastBuffer = adaptiveATR * math.sqrt(forecastBars) * 0.25
+bullForecastTarget = forecastBull ? math.min(close + forecastATR, nearestResistance - forecastBuffer) : close + forecastATR * 0.5
+bearForecastTarget = not forecastBull ? math.max(close - forecastATR, nearestSupport + forecastBuffer) : close - forecastATR * 0.5
+forecastTarget = forecastBull ? bullForecastTarget : bearForecastTarget
+coneWidth = atrSafe * math.sqrt(forecastBars) * (1.0 - coneConfidence)
+upperBand = not na(forecastTarget) ? forecastTarget + coneWidth : na
+lowerBand = not na(forecastTarget) ? forecastTarget - coneWidth : na
+
+var line forecastLineA   = na
+var line forecastLineB   = na
+var label forecastLabelA = na
+var label forecastLabelB = na
+var bool forecastToggle  = false
+
+if showForecast and barstate.isconfirmed and not (perfMode and perfReduceVis)
+    forecastToggle := not forecastToggle
+    if forecastToggle
+        if na(forecastLineA)
+            forecastLineA := line.new(bar_index, close, bar_index + forecastBars, forecastTarget, color=forecastBull ? cBull : cBear, style=line.style_solid, width=3)
+        else
+            line.set_xy1(forecastLineA, bar_index, close)
+            line.set_xy2(forecastLineA, bar_index + forecastBars, forecastTarget)
+            line.set_color(forecastLineA, forecastBull ? cBull : cBear)
+        if not na(forecastLineB)
+            line.set_color(forecastLineB, color.new(#000000, 100))
+    else
+        if na(forecastLineB)
+            forecastLineB := line.new(bar_index, close, bar_index + forecastBars, forecastTarget, color=forecastBull ? cBull : cBear, style=line.style_solid, width=3)
+        else
+            line.set_xy1(forecastLineB, bar_index, close)
+            line.set_xy2(forecastLineB, bar_index + forecastBars, forecastTarget)
+            line.set_color(forecastLineB, forecastBull ? cBull : cBear)
+        if not na(forecastLineA)
+            line.set_color(forecastLineA, color.new(#000000, 100))
+    if forecastToggle
+        if na(forecastLabelA)
+            forecastLabelA := label.new(bar_index + forecastBars, forecastTarget, "VOL BAND TARGET", style=label.style_label_left, color=forecastBull ? color.new(#10B981, 20) : color.new(#DC2626, 20), textcolor=cTextPrimary, size=size.small)
+        else
+            label.set_x(forecastLabelA, bar_index + forecastBars)
+            label.set_y(forecastLabelA, forecastTarget)
+            label.set_color(forecastLabelA, forecastBull ? color.new(#10B981, 20) : color.new(#DC2626, 20))
+    else
+        if na(forecastLabelB)
+            forecastLabelB := label.new(bar_index + forecastBars, forecastTarget, "VOL BAND TARGET", style=label.style_label_left, color=forecastBull ? color.new(#10B981, 20) : color.new(#DC2626, 20), textcolor=cTextPrimary, size=size.small)
+        else
+            label.set_x(forecastLabelB, bar_index + forecastBars)
+            label.set_y(forecastLabelB, forecastTarget)
+            label.set_color(forecastLabelB, forecastBull ? color.new(#10B981, 20) : color.new(#DC2626, 20))
+
+//=====================================================================
+// STRUCTURE ENGINE 3.0 — MSS + Structure Score
+//=====================================================================
+
+mssBull = showMSS and bullBOS and bearTrend[1] and displacementUp and highVolume and adxVal > adxThreshold
+mssBear = showMSS and bearBOS and bullTrend[1] and displacementDown and highVolume and adxVal > adxThreshold
+
+bosQualBull = bullBOS ? (not na(bosResistanceSnap) and close > bosResistanceSnap * 1.002 ? 20 : not na(bosResistanceSnap) and close > bosResistanceSnap * 1.001 ? 14 : 8) : 0
+bosQualBear = bearBOS ? (not na(bosSupportSnap) and close < bosSupportSnap * 0.998 ? 20 : not na(bosSupportSnap) and close < bosSupportSnap * 0.999 ? 14 : 8) : 0
+chochQualBull = bullCHOCH ? 15 : 0
+chochQualBear = bearCHOCH ? 15 : 0
+
+structureScoreBull = 0
+structureScoreBull += htfAlignmentLong >= 3 ? 25 : htfAlignmentLong >= 2 ? 20 : htfAlignmentLong >= 1 ? 10 : 0
+structureScoreBull += bullTrend ? 20 : 0
+structureScoreBull += bosQualBull
+structureScoreBull += chochQualBull
+structureScoreBull += mssBull ? 15 : 0
+structureScoreBull += not na(supportLevel) and close > supportLevel ? 5 : 0
+structureScoreBull += emaSupertrendBull ? 5 : 0
+structureScoreBull += close > ema200 ? 5 : 0
+structureScoreBull := math.min(structureScoreBull, 100)
+
+structureScoreBear = 0
+structureScoreBear += htfAlignmentShort >= 3 ? 25 : htfAlignmentShort >= 2 ? 20 : htfAlignmentShort >= 1 ? 10 : 0
+structureScoreBear += bearTrend ? 20 : 0
+structureScoreBear += bosQualBear
+structureScoreBear += chochQualBear
+structureScoreBear += mssBear ? 15 : 0
+structureScoreBear += not na(resistanceLevel) and close < resistanceLevel ? 5 : 0
+structureScoreBear += emaSupertrendBear ? 5 : 0
+structureScoreBear += close < ema200 ? 5 : 0
+structureScoreBear := math.min(structureScoreBear, 100)
+
+structureScore = math.max(structureScoreBull, structureScoreBear)
+structureDirection = structureScoreBull > structureScoreBear ? "BULLISH" : structureScoreBear > structureScoreBull ? "BEARISH" : "NEUTRAL"
+structureCategory = structureScore >= 80 ? (structureDirection == "BULLISH" ? "STRONG BULL STRUCT" : "STRONG BEAR STRUCT") : structureScore >= 60 ? (structureDirection == "BULLISH" ? "MOD BULL STRUCT" : "MOD BEAR STRUCT") : structureScore >= 40 ? "NEUTRAL STRUCT" : (structureDirection == "BULLISH" ? "WEAK BULL STRUCT" : "WEAK BEAR STRUCT")
+structureColorCat = structureScore >= 80 ? cBull : structureScore >= 60 ? cTeal : structureScore >= 40 ? cWarning : cBear
+plotshape(mssBull and recentBars and barstate.isconfirmed and not (perfMode and perfReduceVis), style=shape.flag, location=location.belowbar, color=cMSS, size=size.small, title="MSS Bull")
+plotshape(mssBear and recentBars and barstate.isconfirmed and not (perfMode and perfReduceVis), style=shape.flag, location=location.abovebar, color=cMSS, size=size.small, title="MSS Bear")
+
+//=====================================================================
+// SMART ALERT FRAMEWORK — TIER SYSTEM
+//=====================================================================
+
+alertConfidenceBull = int(math.min((bullBOS ? 15 : 0) + (bullCHOCH ? 10 : 0) + (macroBull and bullTrend ? 12 : 0) + (dxyBear ? 5 : 0) + (yieldFalling ? 5 : 0) + (displacementUp ? 8 : 0) + (climaxUp ? 6 : 0) + (smtStrongBull ? 10 : 0) + (asianLowSweep ? 6 : 0) + (manipHigh ? 4 : 0) + (volStateMarkup and bullTrend ? 5 : 0) + (htfAlignmentLong >= 2 ? 8 : 0) + (ratePressureBull ? 4 : 0) + (dxyMomBear ? 3 : 0), 100))
+alertConfidenceBear = int(math.min((bearBOS ? 15 : 0) + (bearCHOCH ? 10 : 0) + (macroBear and bearTrend ? 12 : 0) + (dxyBull ? 5 : 0) + (yieldRising ? 5 : 0) + (displacementDown ? 8 : 0) + (climaxDown ? 6 : 0) + (smtStrongBear ? 10 : 0) + (asianHighSweep ? 6 : 0) + (manipHigh ? 4 : 0) + (volStateMarkdown and bearTrend ? 5 : 0) + (htfAlignmentShort >= 2 ? 8 : 0) + (ratePressureBear ? 4 : 0) + (dxyMomBull ? 3 : 0), 100))
+
+alertConfidence = bullScore > bearScore ? alertConfidenceBull : alertConfidenceBear
+alertConfidenceBullFinal = inKillzone ? math.min(int(alertConfidenceBull * killzoneBoost), 100) : alertConfidenceBull
+alertConfidenceBearFinal = inKillzone ? math.min(int(alertConfidenceBear * killzoneBoost), 100) : alertConfidenceBear
+alertConfidenceFinal = bullScore > bearScore ? alertConfidenceBullFinal : alertConfidenceBearFinal
+
+alertBullS_raw = showSmartAlerts and alertConfidenceBullFinal >= tierSThresh and bullScore > bearScore and bullConfluenceCapped >= minConfluence and htfAlignmentLong >= 3 and bullNonTrendConfluence >= 2 and inKillzone and adxVal > adxThreshold and bullRsiDiv and bullHasNonTrendFactor
+alertBearS_raw = showSmartAlerts and alertConfidenceBearFinal >= tierSThresh and bearScore > bullScore and bearConfluenceCapped >= minConfluence and htfAlignmentShort >= 3 and bearNonTrendConfluence >= 2 and inKillzone and adxVal > adxThreshold and bearRsiDiv and bearHasNonTrendFactor
+alertBullA_raw = showSmartAlerts and alertConfidenceBullFinal >= tierAThresh and bullScore > bearScore and bullConfluenceCapped >= minConfluence and htfAlignmentLong >= 2 and bullNonTrendConfluence >= 2 and inKillzone and bullRsiDiv and bullHasNonTrendFactor
+alertBearA_raw = showSmartAlerts and alertConfidenceBearFinal >= tierAThresh and bearScore > bullScore and bearConfluenceCapped >= minConfluence and htfAlignmentShort >= 2 and bearNonTrendConfluence >= 2 and inKillzone and bearRsiDiv and bearHasNonTrendFactor
+alertBullB_raw = showSmartAlerts and alertConfidenceBullFinal >= 45 and bullScore > bearScore and bullConfluenceCapped >= minConfluence and htfBullGate and bullHasNonTrendFactor
+alertBearB_raw = showSmartAlerts and alertConfidenceBearFinal >= 45 and bearScore > bullScore and bearConfluenceCapped >= minConfluence and htfBearGate and bearHasNonTrendFactor
+alertBullC_raw = showSmartAlerts and showCTier and alertConfidenceBullFinal >= 30 and bullScore > bearScore and htfAlignmentLong >= 1 and bullHasNonTrendFactor
+alertBearC_raw = showSmartAlerts and showCTier and alertConfidenceBearFinal >= 30 and bearScore > bullScore and htfAlignmentShort >= 1 and bearHasNonTrendFactor
+
+var int bullSCount = 0
+var int bearSCount = 0
+var int bullACount = 0
+var int bearACount = 0
+var int bullBCount = 0
+var int bearBCount = 0
+bullSCount := alertBullS_raw ? bullSCount + 1 : 0
+bearSCount := alertBearS_raw ? bearSCount + 1 : 0
+bullACount := alertBullA_raw ? bullACount + 1 : 0
+bearACount := alertBearA_raw ? bearACount + 1 : 0
+bullBCount := alertBullB_raw ? bullBCount + 1 : 0
+bearBCount := alertBearB_raw ? bearBCount + 1 : 0
+
+alertBullS_conf = bullSCount >= confirmationBars
+alertBearS_conf = bearSCount >= confirmationBars
+alertBullA_conf = bullACount >= confirmationBars
+alertBearA_conf = bearACount >= confirmationBars
+alertBullB_conf = bullBCount >= confirmationBars
+alertBearB_conf = bearBCount >= confirmationBars
+
+alertBullS = alertBullS_conf and bar_index - lastLongSignalBar  > signalCooldown
+alertBearS = alertBearS_conf and bar_index - lastShortSignalBar > signalCooldown
+alertBullA = alertBullA_conf and not alertBullS_conf and bar_index - lastLongSignalBar  > signalCooldown
+alertBearA = alertBearA_conf and not alertBearS_conf and bar_index - lastShortSignalBar > signalCooldown
+alertBullB = alertBullB_conf and not alertBullA_conf and not alertBullS_conf and bar_index - lastLongSignalBar  > signalCooldown
+alertBearB = alertBearB_conf and not alertBearA_conf and not alertBearS_conf and bar_index - lastShortSignalBar > signalCooldown
+alertBullC = alertBullC_raw and not alertBullB_conf
+alertBearC = alertBearC_raw and not alertBearB_conf
+
+// Base high-confidence flags (pre-filter)
+alertBullHigh_base = alertBullS or alertBullA or alertBullB
+alertBearHigh_base = alertBearS or alertBearA or alertBearB
+
+plotshape(alertBullC and not (perfMode and perfReduceVis), style=shape.circle,       location=location.belowbar, color=cTierC, size=size.tiny,   title="C-Grade Long")
+plotshape(alertBearC and not (perfMode and perfReduceVis), style=shape.circle,       location=location.abovebar, color=cTierC, size=size.tiny,   title="C-Grade Short")
+plotshape(corrBreakdown and recentBars and not (perfMode and perfReduceVis), style=shape.xcross, location=location.abovebar, color=color.new(#F59E0B, 20), size=size.tiny, title="Correlation Breakdown Warning")
+
+//=====================================================================
+// SIGNAL STALENESS DECAY + ACTIVE TRADE ZONE
+//=====================================================================
+
+var int barsSinceLastSignal = 999
+if alertBullHigh_base or alertBearHigh_base
+    barsSinceLastSignal := 0
+else
+    barsSinceLastSignal := barsSinceLastSignal + 1
+decayPeriods = math.min(math.floor(barsSinceLastSignal / 5), 3)
+decayFactor  = 1.0 - decayPeriods * 0.20
+float effectiveConfidence = alertBullHigh_base or alertBearHigh_base ? float(alertConfidenceFinal) : (barsSinceLastSignal >= decayBars ? float(alertConfidenceFinal) * decayFactor : float(alertConfidenceFinal))
+int effectiveConfidenceInt = int(math.max(effectiveConfidence, 0))
+signalIsStale = barsSinceLastSignal >= decayBars and not (alertBullHigh_base or alertBearHigh_base)
+activeBullZone = alertConfidence >= 45 and bullScore > bearScore
+activeBearZone = alertConfidence >= 45 and bearScore > bullScore
+bgcolor(activeBullZone ? cBullGlow : activeBearZone ? cBearGlow : na, title="Active Trade Zone")
+
+//=====================================================================
+// RISK FRAMEWORK
+//=====================================================================
+
+atrStop = adaptiveATR * riskMultiplierDynamic
+longStopLoss  = not na(supportLevel) and supportLevel < close ? math.max(supportLevel, close - atrStop) : close - atrStop
+shortStopLoss = not na(resistanceLevel) and resistanceLevel > close ? math.min(resistanceLevel, close + atrStop) : close + atrStop
+longRisk  = not na(longStopLoss)  ? close - longStopLoss  : na
+shortRisk = not na(shortStopLoss) ? shortStopLoss - close : na
+longTakeProfit  = not na(longRisk)  and longRisk  > 0 ? close + (longRisk  * rewardRatio) : na
+shortTakeProfit = not na(shortRisk) and shortRisk > 0 ? close - (shortRisk * rewardRatio) : na
+riskAmount        = accountSize * (riskPerTrade / 100)
+longPositionSize  = not na(longRisk)  and longRisk  > 0 ? (riskAmount / longRisk)  * positionSizeFactor : na
+shortPositionSize = not na(shortRisk) and shortRisk > 0 ? (riskAmount / shortRisk) * positionSizeFactor : na
+
+var line longStopLine    = na
+var line longTargetLine  = na
+var line shortStopLine   = na
+var line shortTargetLine = na
+if showRisk and barstate.islast
+    if alertBullHigh_base
+        if na(longStopLine)
+            longStopLine := line.new(bar_index, longStopLoss, bar_index + 1, longStopLoss, color=cRisk, width=2, style=line.style_dashed, extend=extend.right)
+        else
+            line.set_xy1(longStopLine, bar_index, longStopLoss)
+            line.set_xy2(longStopLine, bar_index + 1, longStopLoss)
+        if na(longTargetLine)
+            longTargetLine := line.new(bar_index, longTakeProfit, bar_index + 1, longTakeProfit, color=cTarget, width=2, style=line.style_dashed, extend=extend.right)
+        else
+            line.set_xy1(longTargetLine, bar_index, longTakeProfit)
+            line.set_xy2(longTargetLine, bar_index + 1, longTakeProfit)
+    else
+        if not na(longStopLine)
+            line.delete(longStopLine)
+            longStopLine := na
+        if not na(longTargetLine)
+            line.delete(longTargetLine)
+            longTargetLine := na
+    if alertBearHigh_base
+        if na(shortStopLine)
+            shortStopLine := line.new(bar_index, shortStopLoss, bar_index + 1, shortStopLoss, color=cRisk, width=2, style=line.style_dashed, extend=extend.right)
+        else
+            line.set_xy1(shortStopLine, bar_index, shortStopLoss)
+            line.set_xy2(shortStopLine, bar_index + 1, shortStopLoss)
+        if na(shortTargetLine)
+            shortTargetLine := line.new(bar_index, shortTakeProfit, bar_index + 1, shortTakeProfit, color=cTarget, width=2, style=line.style_dashed, extend=extend.right)
+        else
+            line.set_xy1(shortTargetLine, bar_index, shortTakeProfit)
+            line.set_xy2(shortTargetLine, bar_index + 1, shortTakeProfit)
+    else
+        if not na(shortStopLine)
+            line.delete(shortStopLine)
+            shortStopLine := na
+        if not na(shortTargetLine)
+            line.delete(shortTargetLine)
+            shortTargetLine := na
+
+//=====================================================================
+// FIBONACCI EXTENSION TARGETS
+//=====================================================================
+
+var float fibMoveOrigin = na
+var float fibMoveEnd    = na
+var bool  fibIsBull     = false
+if bullBOS or bullCHOCH
+    fibMoveOrigin := low[1]
+    fibMoveEnd    := high
+    fibIsBull     := true
+if bearBOS or bearCHOCH
+    fibMoveOrigin := high[1]
+    fibMoveEnd    := low
+    fibIsBull     := false
+
+var line fibT1Line = na
+var line fibT2Line = na
+var line fibT3Line = na
+var label fibT1Lbl = na
+var label fibT2Lbl = na
+var label fibT3Lbl = na
+if showFibTargets and barstate.islast and not na(fibMoveOrigin) and not na(fibMoveEnd)
+    fibRange = math.abs(fibMoveEnd - fibMoveOrigin)
+    float fT1 = fibIsBull ? fibMoveEnd + fibRange * fibT1Level : fibMoveEnd - fibRange * fibT1Level
+    float fT2 = fibIsBull ? fibMoveEnd + fibRange * fibT2Level : fibMoveEnd - fibRange * fibT2Level
+    float fT3 = fibIsBull ? fibMoveEnd + fibRange * fibT3Level : fibMoveEnd - fibRange * fibT3Level
+    fibColor1 = fibIsBull ? color.new(#10B981, 40) : color.new(#DC2626, 40)
+    fibColor2 = fibIsBull ? color.new(#10B981, 20) : color.new(#DC2626, 20)
+    fibColor3 = fibIsBull ? color.new(#10B981, 0)  : color.new(#DC2626, 0)
+    if na(fibT1Line)
+        fibT1Line := line.new(bar_index, fT1, bar_index + 1, fT1, color=fibColor1, width=1, style=line.style_dashed, extend=extend.right)
+    else
+        line.set_y1(fibT1Line, fT1)
+        line.set_y2(fibT1Line, fT1)
+        line.set_color(fibT1Line, fibColor1)
+    if na(fibT2Line)
+        fibT2Line := line.new(bar_index, fT2, bar_index + 1, fT2, color=fibColor2, width=1, style=line.style_dashed, extend=extend.right)
+    else
+        line.set_y1(fibT2Line, fT2)
+        line.set_y2(fibT2Line, fT2)
+        line.set_color(fibT2Line, fibColor2)
+    if na(fibT3Line)
+        fibT3Line := line.new(bar_index, fT3, bar_index + 1, fT3, color=fibColor3, width=2, style=line.style_dashed, extend=extend.right)
+    else
+        line.set_y1(fibT3Line, fT3)
+        line.set_y2(fibT3Line, fT3)
+        line.set_color(fibT3Line, fibColor3)
+    if na(fibT1Lbl)
+        fibT1Lbl := label.new(bar_index + 8, fT1, "T1 " + str.tostring(fibT1Level), style=label.style_label_left, color=fibColor1, textcolor=cTextPrimary, size=size.tiny)
+    else
+        label.set_x(fibT1Lbl, bar_index + 8)
+        label.set_y(fibT1Lbl, fT1)
+        label.set_color(fibT1Lbl, fibColor1)
+    if na(fibT2Lbl)
+        fibT2Lbl := label.new(bar_index + 8, fT2, "T2 " + str.tostring(fibT2Level), style=label.style_label_left, color=fibColor2, textcolor=cTextPrimary, size=size.tiny)
+    else
+        label.set_x(fibT2Lbl, bar_index + 8)
+        label.set_y(fibT2Lbl, fT2)
+        label.set_color(fibT2Lbl, fibColor2)
+    if na(fibT3Lbl)
+        fibT3Lbl := label.new(bar_index + 8, fT3, "T3 " + str.tostring(fibT3Level), style=label.style_label_left, color=fibColor3, textcolor=cTextPrimary, size=size.tiny)
+    else
+        label.set_x(fibT3Lbl, bar_index + 8)
+        label.set_y(fibT3Lbl, fT3)
+        label.set_color(fibT3Lbl, fibColor3)
+
+//=====================================================================
+// SESSION LIQUIDITY TRACKER + CORE PLOTS
+//=====================================================================
+
+asianHigh = asianSessionHigh
+asianLow  = asianSessionLow
+londonOpenSpike = inLondon and (high > asianHigh[1] or low < asianLow[1])
+nyOpenSpike     = inNY     and (high > asianHigh[1] or low < asianLow[1])
+nearPDH = not na(liqPDH) and math.abs(close - liqPDH) < adaptiveATR * 0.5
+nearPDL = not na(liqPDL) and math.abs(close - liqPDL) < adaptiveATR * 0.5
+nearPWH = not na(liqPWH) and math.abs(close - liqPWH) < adaptiveATR * 0.5
+nearPWL = not na(liqPWL) and math.abs(close - liqPWL) < adaptiveATR * 0.5
+liquidityPoolActive = nearPDH or nearPDL or nearPWH or nearPWL
+bool liqAlarmLondon = liquidityPoolActive and londonOpenSpike
+bool liqAlarmNY     = liquidityPoolActive and nyOpenSpike
+bool liqAlarmActive = liqAlarmLondon or liqAlarmNY
+bgcolor(liqAlarmActive ? (liqAlarmLondon ? color.new(cWarning, 95) : color.new(cBear, 95)) : na, title="Liquidity Pool Alarm")
+
+var line  asianHighLine   = na
+var line  asianLowLine    = na
+var label asianRangeLabel = na
+if barstate.islast and showSessions
+    _asianLineLeft  = math.max(1, math.round(asianLookback))
+    _asianLineRight = math.max(5, math.round(asianLookback / 5))
+    if na(asianHighLine)
+        asianHighLine := line.new(bar_index - _asianLineLeft, asianSessionHigh, bar_index + _asianLineRight, asianSessionHigh, color=color.new(#F59E0B, 60), style=line.style_dashed, width=1)
+    else
+        line.set_xy1(asianHighLine, bar_index - _asianLineLeft, asianSessionHigh)
+        line.set_xy2(asianHighLine, bar_index + _asianLineRight, asianSessionHigh)
+    if na(asianLowLine)
+        asianLowLine := line.new(bar_index - _asianLineLeft, asianSessionLow, bar_index + _asianLineRight, asianSessionLow, color=color.new(#F59E0B, 60), style=line.style_dashed, width=1)
+    else
+        line.set_xy1(asianLowLine, bar_index - _asianLineLeft, asianSessionLow)
+        line.set_xy2(asianLowLine, bar_index + _asianLineRight, asianSessionLow)
+    if na(asianRangeLabel)
+        asianRangeLabel := label.new(bar_index + 5, (asianSessionHigh + asianSessionLow) / 2, "ASIAN RANGE", style=label.style_label_left, color=color.new(#F59E0B, 30), textcolor=cTextMuted, size=size.tiny)
+    else
+        label.set_x(asianRangeLabel, bar_index + 5)
+        label.set_y(asianRangeLabel, (asianSessionHigh + asianSessionLow) / 2)
+
+plot(ema20,                   color=color.new(#38BDF8, 10), linewidth=1, title="EMA20")
+plot(ema50,                   color=color.new(#A855F7, 20), linewidth=1, title="EMA50")
+plot(ema200,                  color=color.new(#F59E0B,  0), linewidth=2, title="EMA200")
+plot(showVWAP ? vwapVal : na, color=color.new(#EC4899, 35), linewidth=2, title="VWAP")
+
+//=====================================================================
+// TRADE ANALYTICS ENGINE
+//=====================================================================
+
+var int totalSignals    = 0
+var int totalLongs      = 0
+var int totalShorts     = 0
+var int totalWins       = 0
+var int totalLosses     = 0
+var float grossProfit   = 0.0
+var float grossLoss     = 0.0
+var float maxRR         = 0.0
+var int maxWinStreak    = 0
+var int maxLossStreak   = 0
+var int currentStreak   = 0
+var int currentStreakType = 0
+var float totalRR       = 0.0
+var int totalTradesWithRR = 0
+var float[] tradeRRs      = array.new_float(0)
+var int[]   tradeResults  = array.new_int(0)
+var int[]   tradeBarsHeld = array.new_int(0)
+var bool signalWasBull = false
+var bool signalWasBear = false
+var int  signalOpenBar = na
+var bool signalOpen    = false
+var float entryPrice   = na
+var float entryStop    = na
+var float entryTarget  = na
+var float entryQtyOz   = na
+var float entryRiskUsd = na
+var float dailyPnL     = 0.0
+var float weeklyPnL    = 0.0
+var float dailyPeakEquity  = accountSize
+var float weeklyPeakEquity = accountSize
+var float trailingPeak = accountSize
+var float trailingDD   = 0.0
+var string propRiskState = "SAFE"
+var float propRiskCapacity = 1.0
+var color propRiskColor = cBull
+var int flipCount          = 0
+
+// Compute true equity for all downstream drawdown/prop metrics
+float closedPnL      = grossProfit - grossLoss
+float unrealizedPnL  = signalOpen ? (signalWasBull ? (close - entryPrice) * nz(entryQtyOz, 0.0) : (entryPrice - close) * nz(entryQtyOz, 0.0)) : 0.0
+float trueEquity     = accountSize + closedPnL + unrealizedPnL
+
+newCalendarDay  = ta.change(time("D")) != 0
+newCalendarWeek = ta.change(time("W")) != 0
+if newCalendarDay
+    dailyPnL := 0.0
+    dailyPeakEquity := trueEquity
+if newCalendarWeek
+    weeklyPnL := 0.0
+    weeklyPeakEquity := trueEquity
+
+if signalOpen
+    barsHeld = bar_index - signalOpenBar
+    longStopHit    = signalWasBull and low <= entryStop
+    longTargetHit  = signalWasBull and high >= entryTarget
+    shortStopHit   = signalWasBear and high >= entryStop
+    shortTargetHit = signalWasBear and low <= entryTarget
+    stopHit        = longStopHit or shortStopHit
+    targetHit      = longTargetHit or shortTargetHit
+    // Sustained signal flip counter (requires confirmationBars consecutive flips)
+    if (signalWasBull and bearScore > bullScore) or (signalWasBear and bullScore > bearScore)
+        flipCount := flipCount + 1
+    else
+        flipCount := 0
+    // Structure invalidation — break of last broken structure or ATR-based fallback
+    float _staleInvSup = not na(lastBrokenSup) ? lastBrokenSup : close - adaptiveATR * 3
+    float _staleInvRes = not na(lastBrokenRes) ? lastBrokenRes : close + adaptiveATR * 3
+    structureInvHit    = (signalWasBull and low <= _staleInvSup) or (signalWasBear and high >= _staleInvRes)
+    sustainedFlip      = flipCount >= confirmationBars
+    timeoutExit        = barsHeld >= 50
+    exitSignal     = stopHit or targetHit or structureInvHit or sustainedFlip or timeoutExit
+    if exitSignal
+        // When stop and target are both touched in one bar, use the stop.
+        float exitPrice = stopHit ? entryStop : targetHit ? entryTarget : close
+        float grossPnl = (signalWasBull ? exitPrice - entryPrice : entryPrice - exitPrice) * nz(entryQtyOz, 0.0)
+        float pnl = grossPnl
+        float rr = nz(entryRiskUsd, 0.0) > 0 ? pnl / entryRiskUsd : 0.0
+        rr := nz(rr, 0)
+        if pnl > 0
+            totalWins := totalWins + 1
+            grossProfit := grossProfit + pnl
+            if currentStreakType == 1
+                currentStreak := currentStreak + 1
+            else
+                currentStreak := 1
+                currentStreakType := 1
+            maxWinStreak := math.max(maxWinStreak, currentStreak)
+        else
+            totalLosses := totalLosses + 1
+            grossLoss := grossLoss + math.abs(pnl)
+            if currentStreakType == -1
+                currentStreak := currentStreak + 1
+            else
+                currentStreak := 1
+                currentStreakType := -1
+            maxLossStreak := math.max(maxLossStreak, currentStreak)
+        totalRR := totalRR + rr
+        totalTradesWithRR := totalTradesWithRR + 1
+        maxRR := math.max(maxRR, rr)
+        array.push(tradeRRs, rr)
+        array.push(tradeResults, pnl > 0 ? 1 : 0)
+        array.push(tradeBarsHeld, barsHeld)
+        dailyPnL  := dailyPnL + pnl
+        weeklyPnL := weeklyPnL + pnl
+        signalOpen := false
+        entryPrice   := na
+        entryStop    := na
+        entryTarget  := na
+        entryQtyOz   := na
+        entryRiskUsd := na
+
+while array.size(tradeRRs) > analyticsWinBars
+    array.shift(tradeRRs)
+while array.size(tradeResults) > analyticsWinBars
+    array.shift(tradeResults)
+while array.size(tradeBarsHeld) > analyticsWinBars
+    array.shift(tradeBarsHeld)
+
+_totalClosed = totalWins + totalLosses
+winRate = _totalClosed > 0 ? float(totalWins) / _totalClosed * 100 : 0.0
+avgRR = totalTradesWithRR > 0 ? totalRR / totalTradesWithRR : 0.0
+avgHoldBars = array.size(tradeBarsHeld) > 0 ? float(array.sum(tradeBarsHeld)) / array.size(tradeBarsHeld) : 0.0
+
+// PHASE 3 — Sharpe Proxy: mean(R) / stdev(R) across tracked trades
+var float _rrSumSq = 0.0
+_rrStdev = 0.0
+if totalTradesWithRR > 1
+    float _sumSqDiff = 0.0
+    for i = 0 to array.size(tradeRRs) - 1
+        float _d = array.get(tradeRRs, i) - avgRR
+        _sumSqDiff += _d * _d
+    _rrStdev := math.sqrt(_sumSqDiff / array.size(tradeRRs))
+sharpeProxy = _rrStdev > 0 ? avgRR / _rrStdev : 0.0
+
+//=====================================================================
+// FIX 1: SINGLE-PASS ROLLING ANALYTICS
+// Original code ran three separate loops (O(20) + O(50) + O(100)).
+// The 20-bar window was fully re-read by the 50-bar loop, and the
+// 50-bar window was fully re-read by the 100-bar loop — wasted work.
+// Now a single O(100) pass accumulates all three windows at once.
+//=====================================================================
+
+int rolling20Wins   = 0
+int rolling20Losses = 0
+float rolling20RR   = 0.0
+int rolling50Wins   = 0
+int rolling50Losses = 0
+float rolling50RR   = 0.0
+int rolling100Wins  = 0
+int rolling100Losses = 0
+float rolling100RR  = 0.0
+
+int arrSize = array.size(tradeResults)
+if arrSize > 0
+    for i = 0 to math.min(99, arrSize - 1)
+        int   idx = arrSize - 1 - i
+        int   res = array.get(tradeResults, idx)
+        float rr  = array.get(tradeRRs,    idx)
+        // 100-bar bucket — always accumulate
+        rolling100Wins   += res == 1 ? 1 : 0
+        rolling100Losses += res == 0 ? 1 : 0
+        rolling100RR     += rr
+        // 50-bar bucket
+        if i < 50
+            rolling50Wins   += res == 1 ? 1 : 0
+            rolling50Losses += res == 0 ? 1 : 0
+            rolling50RR     += rr
+        // 20-bar bucket
+        if i < 20
+            rolling20Wins   += res == 1 ? 1 : 0
+            rolling20Losses += res == 0 ? 1 : 0
+            rolling20RR     += rr
+
+int rolling20Total  = rolling20Wins  + rolling20Losses
+int rolling50Total  = rolling50Wins  + rolling50Losses
+int rolling100Total = rolling100Wins + rolling100Losses
+float rolling20WinRate  = rolling20Total  > 0 ? float(rolling20Wins)  / rolling20Total  * 100 : 0.0
+float rolling50WinRate  = rolling50Total  > 0 ? float(rolling50Wins)  / rolling50Total  * 100 : 0.0
+float rolling100WinRate = rolling100Total > 0 ? float(rolling100Wins) / rolling100Total * 100 : 0.0
+float rolling20AvgRR  = rolling20Total  > 0 ? rolling20RR  / rolling20Total  : 0.0
+float rolling50AvgRR  = rolling50Total  > 0 ? rolling50RR  / rolling50Total  : 0.0
+float rolling100AvgRR = rolling100Total > 0 ? rolling100RR / rolling100Total : 0.0
+
+//=====================================================================
+// EXPECTANCY + STATISTICAL CONFIDENCE + VALIDATION + EXEC QUALITY
+//=====================================================================
+
+profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999.0 : 0.0)
+winRateFrac  = _totalClosed > 0 ? float(totalWins)   / _totalClosed : 0.0
+lossRateFrac = _totalClosed > 0 ? float(totalLosses) / _totalClosed : 0.0
+avgWin       = totalWins   > 0 ? grossProfit / totalWins   : 0.0
+avgLoss      = totalLosses > 0 ? grossLoss   / totalLosses : 0.0
+expectedValue = (winRateFrac * avgWin) - (lossRateFrac * avgLoss)
+evPerTrade    = _totalClosed > 0 ? expectedValue : 0.0
+evText  = evPerTrade > 0.5 ? "POSITIVE EV" : evPerTrade < -0.5 ? "NEGATIVE EV" : "NEUTRAL EV"
+evColor = evPerTrade > 0.5 ? cBull : evPerTrade < -0.5 ? cBear : cWarning
+pfText  = profitFactor > 2.0 ? "EXCELLENT" : profitFactor > 1.5 ? "GOOD" : profitFactor > 1.0 ? "ACCEPTABLE" : profitFactor > 0 ? "POOR" : "NO DATA"
+pfColor = profitFactor > 2.0 ? cBull : profitFactor > 1.0 ? cTeal : profitFactor > 0 ? cWarning : cBear
+
+historicalWeight = 0.0
+if _totalClosed >= 20
+    if alertBullS or alertBearS
+        historicalWeight := rolling20WinRate > 60 ? 10.0 : rolling20WinRate > 50 ? 5.0 : rolling20WinRate > 40 ? 0.0 : -5.0
+    else if alertBullA or alertBearA
+        historicalWeight := rolling20WinRate > 55 ? 8.0 : rolling20WinRate > 45 ? 3.0 : rolling20WinRate > 35 ? 0.0 : -3.0
+    else
+        historicalWeight := rolling20WinRate > 50 ? 5.0 : rolling20WinRate > 40 ? 2.0 : 0.0
+regimeConfWeight = 0.0
+if isRegimeTrendExp or isRegimeTrendCon
+    regimeConfWeight := 5.0
+else if isRegimeTrendExh
+    regimeConfWeight := -5.0
+else if isRegimeVolExp
+    regimeConfWeight := -3.0
+else if isRegimeVolComp
+    regimeConfWeight := 3.0
+macroConfWeight = math.abs(macroStrengthScore) / 10.0
+statisticalConfidence = float(alertConfidenceFinal) + historicalWeight + regimeConfWeight + macroConfWeight
+statisticalConfidence := math.max(math.min(statisticalConfidence, 100.0), 0.0)
+statConfInt = int(statisticalConfidence)
+
+htfConflictBull = htfAlignmentShort >= 2 and bullScore > bearScore
+htfConflictBear = htfAlignmentLong  >= 2 and bearScore > bullScore
+htfConflict     = htfConflictBull or htfConflictBear
+regimeMismatchBull = isRegimeTrendExh and bearTrend
+regimeMismatchBear = isRegimeTrendExh and bullTrend
+regimeMismatch     = regimeMismatchBull or regimeMismatchBear
+volSpikeReject = volSpikeActive
+macroReject    = macroContradiction
+signalBlocked = htfConflict or (corrBreakdown and inKillzone) or regimeMismatch or volSpikeReject or macroReject
+signalWeak    = (corrBreakdown and not inKillzone) or (not inKillzone and not htfConflict and not regimeMismatch and not volSpikeReject and not macroReject and alertConfidenceFinal < 50)
+signalValid   = not signalBlocked and not signalWeak and (alertBullHigh_base or alertBearHigh_base)
+validationText  = signalBlocked ? "BLOCKED" : signalWeak ? "WEAK" : signalValid ? "VALID" : "WAIT"
+validationColor = signalBlocked ? cBear : signalWeak ? cWarning : signalValid ? cBull : cNeutral
+
+nearestLiq = math.min(na(liqPDH) ? 999999 : math.abs(close - liqPDH), na(liqPDL) ? 999999 : math.abs(close - liqPDL))
+liqDistScore = nearestLiq < adaptiveATR * 0.5 ? 100 : nearestLiq < adaptiveATR ? 75 : nearestLiq < adaptiveATR * 2 ? 50 : nearestLiq < adaptiveATR * 3 ? 25 : 0
+vwapDist = math.abs(close - vwapVal)
+vwapDistScore = vwapDist < adaptiveATR * 0.3 ? 100 : vwapDist < adaptiveATR * 0.7 ? 75 : vwapDist < adaptiveATR ? 50 : vwapDist < adaptiveATR * 2 ? 25 : 0
+htfAlignScore = (htfFullLong >= 4 or htfFullShort >= 4) ? 100 : (htfFullLong >= 3 or htfFullShort >= 3) ? 80 : (htfFullLong >= 2 or htfFullShort >= 2) ? 60 : (htfFullLong >= 1 or htfFullShort >= 1) ? 30 : 0
+zoneScore = 0
+if bullScore > bearScore
+    zoneScore := discountZone ? 100 : close < vwapVal ? 75 : close < ema20 ? 50 : premiumZone ? 0 : 25
+else
+    zoneScore := premiumZone ? 100 : close > vwapVal ? 75 : close > ema20 ? 50 : discountZone ? 0 : 25
+sessionScore = sessionQuality
+execScoreRaw = (liqDistScore * execLiqWeight / 100.0) + (vwapDistScore * execVwapWeight / 100.0) + (htfAlignScore * execHTFWeight / 100.0) + (zoneScore * execZoneWeight / 100.0) + (sessionScore * execSessionWeight / 100.0)
+executionScore = int(math.min(math.max(execScoreRaw, 0.0), 100.0))
+execGrade  = executionScore >= 80 ? "A" : executionScore >= 60 ? "B" : executionScore >= 40 ? "C" : "D"
+execColor  = executionScore >= 80 ? cBull : executionScore >= 60 ? cTeal : executionScore >= 40 ? cWarning : cBear
+
+//=====================================================================
+// PHASE 2 — TRUE EQUITY CURVE WITH OPEN PNL
+// trueEquity = accountSize + closedPnL + unrealizedPnL
+// closedPnL/unrealizedPnL/trueEquity computed earlier (before calendar day check)
+// All drawdown metrics derive from trueEquity
+//=====================================================================
+
+var float peakEquity      = accountSize
+var float currentDrawdown = 0.0
+var float maxDrawdown     = 0.0
+
+if trueEquity > peakEquity
+    peakEquity := trueEquity
+currentDrawdown := peakEquity > 0 ? math.max(0.0, (peakEquity - trueEquity) / peakEquity * 100) : 0.0
+maxDrawdown     := math.max(maxDrawdown, currentDrawdown)
+
+if trueEquity > trailingPeak
+    trailingPeak := trueEquity
+trailingDD := trailingPeak > 0 ? math.max(0.0, (trailingPeak - trueEquity) / trailingPeak * 100) : 0.0
+
+if trueEquity > dailyPeakEquity
+    dailyPeakEquity := trueEquity
+if trueEquity > weeklyPeakEquity
+    weeklyPeakEquity := trueEquity
+
+dailyDD  = dailyPeakEquity > 0 ? math.max(0.0, (dailyPeakEquity - trueEquity) / dailyPeakEquity * 100) : 0.0
+weeklyDD = weeklyPeakEquity > 0 ? math.max(0.0, (weeklyPeakEquity - trueEquity) / weeklyPeakEquity * 100) : 0.0
+
+//=====================================================================
+// PROP FIRM ENGINE 2.0 — HYSTERESIS STATE MACHINE
+// Transitions use hysteresis to prevent bar-to-bar oscillation:
+//   SAFE → CAUTION at 50%, clears at 30%
+//   CAUTION → RESTRICTED at 80%, clears at 60%
+//   RESTRICTED → LOCKDOWN at 100%, no automatic clear
+//=====================================================================
+
+var string _prevPropState = "SAFE"
+
+_safeToCaution   = dailyDD > propDailyLimit * 0.5 or weeklyDD > propWeeklyLimit * 0.5
+_cautionToSafe   = dailyDD < propDailyLimit * 0.3 and weeklyDD < propWeeklyLimit * 0.3
+_cautionToRestricted = dailyDD > propDailyLimit * 0.8 or weeklyDD > propWeeklyLimit * 0.8 or maxDrawdown > propMaxLimit * 0.8 or trailingDD > propMaxLimit * 0.7
+_restrictedToCaution  = dailyDD < propDailyLimit * 0.6 and weeklyDD < propWeeklyLimit * 0.6 and maxDrawdown < propMaxLimit * 0.6
+_restrictedToLockdown = dailyDD > propDailyLimit or weeklyDD > propWeeklyLimit or maxDrawdown > propMaxLimit
+
+if _prevPropState == "SAFE"
+    propRiskState := _safeToCaution ? "CAUTION" : "SAFE"
+else if _prevPropState == "CAUTION"
+    propRiskState := _cautionToRestricted ? "RESTRICTED" : _cautionToSafe ? "SAFE" : "CAUTION"
+else if _prevPropState == "RESTRICTED"
+    propRiskState := _restrictedToLockdown ? "LOCKDOWN" : _restrictedToCaution ? "CAUTION" : "RESTRICTED"
+else
+    propRiskState := "LOCKDOWN"
+
+_prevPropState := propRiskState
+
+propRiskCapacity := propRiskState == "LOCKDOWN" ? 0.0 : propRiskState == "RESTRICTED" ? 0.5 : propRiskState == "CAUTION" ? 0.75 : 1.0
+propRiskColor := propRiskState == "LOCKDOWN" ? cBear : propRiskState == "RESTRICTED" ? cWarning : propRiskState == "CAUTION" ? cTeal : cBull
+
+// Regime-only risk multiplier (no expectancy feedback loop)
+regimeRiskMult = isRegimeTrendExp ? 1.1 : isRegimeTrendCon ? 1.05 : isRegimeTrendExh ? 0.7 : isRegimeVolExp ? 0.6 : isRegimeVolComp ? 0.9 : 1.0
+volRiskMult    = volStateExplosive ? 0.5 : volStateElevated ? 0.75 : 1.0
+ddRiskMult     = propRiskState == "LOCKDOWN" ? 0.0 : propRiskState == "RESTRICTED" ? 0.5 : propRiskState == "CAUTION" ? 0.75 : 1.0
+
+baseTierRisk = alertBullS or alertBearS ? tierSBaseRisk : alertBullA or alertBearA ? tierABaseRisk : alertBullB or alertBearB ? tierBBaseRisk : alertBullC or alertBearC ? tierCBaseRisk : 0.0
+recommendedRisk = baseTierRisk * regimeRiskMult * volRiskMult * ddRiskMult
+recommendedRisk := propRiskCapacity > 0 ? math.max(math.min(recommendedRisk * propRiskCapacity, 3.0), 0.1) : 0.0
+
+_liveIsLong = bullScore >= bearScore
+_liveStop   = _liveIsLong ? longStopLoss  : shortStopLoss
+_liveRisk   = _liveIsLong ? longRisk      : shortRisk
+recPosSize  = (alertBullHigh_base or alertBearHigh_base) and not na(_liveRisk) and _liveRisk > 0 ? (accountSize * (recommendedRisk_v19 / 100)) / _liveRisk : na
+
+//=====================================================================
+// ORDER FLOW SCORE (v19)
+//=====================================================================
+
+bullOBPresent  = array.size(bullOBBoxes) > 0
+bearOBPresent  = array.size(bearOBBoxes) > 0
+bullOBTopScore = bullOBPresent ? array.get(bullOBScores, array.size(bullOBScores) - 1) : 0
+bearOBTopScore = bearOBPresent ? array.get(bearOBScores, array.size(bearOBScores) - 1) : 0
+bullFVGTopScore = array.size(bullFVGScores) > 0 ? array.get(bullFVGScores, array.size(bullFVGScores) - 1) : 0
+bearFVGTopScore = array.size(bearFVGScores) > 0 ? array.get(bearFVGScores, array.size(bearFVGScores) - 1) : 0
+
+flowScoreBull = 0
+flowScoreBull += bullOBTopScore >= 85 ? 20 : bullOBTopScore >= 70 ? 15 : bullOBTopScore >= 50 ? 10 : 0
+flowScoreBull += bullFVGTopScore >= 85 ? 15 : bullFVGTopScore >= 70 ? 10 : 0
+flowScoreBull += displacementUp ? 15 : 0
+flowScoreBull += climaxUp ? 15 : 0
+flowScoreBull += highVolume ? 10 : 0
+flowScoreBull += bullBOS ? 10 : 0
+flowScoreBull += ratePressureBull ? 5 : 0
+flowScoreBull += htfBullGate ? 10 : 0
+flowScoreBull := math.min(flowScoreBull, 100)
+
+flowScoreBear = 0
+flowScoreBear += bearOBTopScore >= 85 ? 20 : bearOBTopScore >= 70 ? 15 : bearOBTopScore >= 50 ? 10 : 0
+flowScoreBear += bearFVGTopScore >= 85 ? 15 : bearFVGTopScore >= 70 ? 10 : 0
+flowScoreBear += displacementDown ? 15 : 0
+flowScoreBear += climaxDown ? 15 : 0
+flowScoreBear += highVolume ? 10 : 0
+flowScoreBear += bearBOS ? 10 : 0
+flowScoreBear += ratePressureBear ? 5 : 0
+flowScoreBear += htfBearGate ? 10 : 0
+flowScoreBear := math.min(flowScoreBear, 100)
+
+flowScore = math.max(flowScoreBull, flowScoreBear)
+flowDirection = flowScoreBull > flowScoreBear ? "BUYING" : flowScoreBear > flowScoreBull ? "SELLING" : "NEUTRAL"
+flowCategory = flowScore >= 75 ? (flowDirection == "BUYING" ? "INSTITUTIONAL BUYING" : "INSTITUTIONAL SELLING") : flowScore >= 50 ? (flowDirection == "BUYING" ? "MODERATE BUYING" : "MODERATE SELLING") : "NEUTRAL FLOW"
+flowGrade = flowScore >= 85 ? "A+" : flowScore >= 70 ? "A" : flowScore >= 55 ? "B" : flowScore >= 40 ? "C" : "D"
+flowColorCat = flowScore >= 75 ? cBull : flowScore >= 50 ? cTeal : cWarning
+
+//=====================================================================
+// FIX 4: LIQUIDITY MAGNET ENGINE
+// Original: equality chain for liqTargetText — fragile when multiple
+// magnets tie at maxMagnet (first match wins silently).
+// Fixed: use array.indexof(max) for deterministic, tie-safe selection.
+//=====================================================================
+
+_dPDH = not na(liqPDH) ? math.abs(close - liqPDH) / adaptiveATR : 999.0
+_dPDL = not na(liqPDL) ? math.abs(close - liqPDL) / adaptiveATR : 999.0
+_dPWH = not na(liqPWH) ? math.abs(close - liqPWH) / adaptiveATR : 999.0
+_dPWL = not na(liqPWL) ? math.abs(close - liqPWL) / adaptiveATR : 999.0
+_dEQH = not na(swingHigh1) and equalHighs ? math.abs(close - swingHigh1) / adaptiveATR : 999.0
+_dEQL = not na(swingLow1)  and equalLows  ? math.abs(close - swingLow1)  / adaptiveATR : 999.0
+_dRes = not na(resistanceLevel) ? math.abs(close - resistanceLevel) / adaptiveATR : 999.0
+_dSup = not na(supportLevel)    ? math.abs(close - supportLevel)    / adaptiveATR : 999.0
+
+qPDH = _dPDH < 5 and _dPDH > 0.3 ? math.max(0, 100 - _dPDH * 20) : 0
+qPDL = _dPDL < 5 and _dPDL > 0.3 ? math.max(0, 100 - _dPDL * 20) : 0
+qPWH = _dPWH < 8 and _dPWH > 0.5 ? math.max(0, 80 - _dPWH * 10) : 0
+qPWL = _dPWL < 8 and _dPWL > 0.5 ? math.max(0, 80 - _dPWL * 10) : 0
+qEQH = _dEQH < 3 and _dEQH > 0.3 ? math.max(0, 90 - _dEQH * 30) : 0
+qEQL = _dEQL < 3 and _dEQL > 0.3 ? math.max(0, 90 - _dEQL * 30) : 0
+qRes = _dRes < 4 and _dRes > 0.3 ? math.max(0, 85 - _dRes * 20) : 0
+qSup = _dSup < 4 and _dSup > 0.3 ? math.max(0, 85 - _dSup * 20) : 0
+
+liqVolBoost = highVolume ? 1.3 : volume > volSma50 ? 1.15 : 1.0
+mPDH = qPDH * liqVolBoost * (bearScore > bullScore ? 1.2 : 0.8)
+mPDL = qPDL * liqVolBoost * (bullScore > bearScore ? 1.2 : 0.8)
+mPWH = qPWH * liqVolBoost * (bearScore > bullScore ? 1.1 : 0.9)
+mPWL = qPWL * liqVolBoost * (bullScore > bearScore ? 1.1 : 0.9)
+mEQH = qEQH * liqVolBoost * (bearScore > bullScore ? 1.3 : 0.7)
+mEQL = qEQL * liqVolBoost * (bullScore > bearScore ? 1.3 : 0.7)
+mRes = qRes * liqVolBoost * (bearScore > bullScore ? 1.2 : 0.8)
+mSup = qSup * liqVolBoost * (bullScore > bearScore ? 0.8 : 1.2)
+
+var float[] allMagnets     = array.new_float(8)
+var string[] _magnetLabels = array.from("PDH", "PDL", "PWH", "PWL", "EQH", "EQL", "RES", "SUP")
+array.set(allMagnets, 0, mPDH)
+array.set(allMagnets, 1, mPDL)
+array.set(allMagnets, 2, mPWH)
+array.set(allMagnets, 3, mPWL)
+array.set(allMagnets, 4, mEQH)
+array.set(allMagnets, 5, mEQL)
+array.set(allMagnets, 6, mRes)
+array.set(allMagnets, 7, mSup)
+
+float maxMagnet    = array.max(allMagnets)
+int   liqBestIdx   = array.indexof(allMagnets, maxMagnet)  // deterministic; no tie ambiguity
+liqMagnetScore     = math.min(maxMagnet, 100)
+liqTargetText      = liqBestIdx >= 0 ? array.get(_magnetLabels, liqBestIdx) : "NONE"
+
+liqTargetPrice = liqBestIdx == 0 ? liqPDH : liqBestIdx == 1 ? liqPDL : liqBestIdx == 2 ? liqPWH : liqBestIdx == 3 ? liqPWL : liqBestIdx == 4 ? swingHigh1 : liqBestIdx == 5 ? swingLow1 : liqBestIdx == 6 ? resistanceLevel : supportLevel
+liqTargetValid = maxMagnet > 20
+
+//=====================================================================
+// PROBABILITY MODEL (heuristic softmax)
+//=====================================================================
+
+probContinuationBase = isRegimeTrendExp ? 75.0 : isRegimeTrendCon ? 65.0 : isRegimeTrendExh ? 35.0 : isRegimeVolExp ? 55.0 : isRegimeVolComp ? 45.0 : 50.0
+probContinuation = math.max(math.min(probContinuationBase + (highVolume ? 10.0 : 0.0) + (htfAlignmentLong >= 2 or htfAlignmentShort >= 2 ? 10.0 : 0.0), 95.0), 10.0)
+
+bullContScore = 0.0
+bullContScore += structureScoreBull >= 60 ? 25 : structureScoreBull >= 40 ? 15 : 0
+bullContScore += flowScoreBull >= 50 ? 20 : 0
+bullContScore += macroStrengthScore > 20 ? 15 : 0
+bullContScore += htfAlignmentLong >= 3 ? 15 : htfAlignmentLong >= 2 ? 10 : 0
+bullContScore += regimeTrending and not isRegimeTrendExh ? 10 : 0
+bullContScore += avgCorrHealth > 60 ? 5 : 0
+bullContScore += probContinuation > 60 ? 10 : 0
+
+bearRevScore = 0.0
+bearRevScore += structureScoreBear >= 60 ? 25 : structureScoreBear >= 40 ? 15 : 0
+bearRevScore += flowScoreBear >= 50 ? 20 : 0
+bearRevScore += macroStrengthScore < -20 ? 15 : 0
+bearRevScore += htfAlignmentShort >= 3 ? 15 : htfAlignmentShort >= 2 ? 10 : 0
+bearRevScore += regimeTrending and not isRegimeTrendExh ? 10 : 0
+bearRevScore += avgCorrHealth > 60 ? 5 : 0
+bearRevScore += probContinuation < 40 ? 10 : 0
+
+rangeScore = 0.0
+rangeScore += regimeRanging or regimeDead ? 30 : 0
+rangeScore += adxVal < 20 ? 20 : 0
+rangeScore += bbWidthPercentile < 30 ? 15 : 0
+rangeScore += math.abs(close - vwapVal) < adaptiveATR * 0.5 ? 15 : 0
+rangeScore += not (displacementUp or displacementDown) ? 10 : 0
+rangeScore += volStateAccumulation ? 10 : 0
+
+_eB = math.exp(bullContScore * 0.09)
+_eR = math.exp(bearRevScore  * 0.09)
+_eG = math.exp(rangeScore    * 0.09)
+_eS = _eB + _eR + _eG
+probBull  = _eS > 0 ? _eB / _eS * 100 : 33.3
+probBear  = _eS > 0 ? _eR / _eS * 100 : 33.3
+probRange = _eS > 0 ? _eG / _eS * 100 : 33.3
+mostLikelyOutcome = probBull > probBear and probBull > probRange ? "BULL CONTINUATION" : probBear > probBull and probBear > probRange ? "BEAR REVERSAL" : "RANGE"
+mostLikelyProb = math.max(probBull, math.max(probBear, probRange))
+
+//=====================================================================
+// NEWS RISK ENGINE
+//=====================================================================
+
+newsConfidenceMult = newsRiskLevel == 0 ? 1.0 : newsRiskLevel == 1 ? 0.85 : newsRiskLevel == 2 ? 0.65 : 0.4
+newsRiskMult       = newsRiskLevel == 0 ? 1.0 : newsRiskLevel == 1 ? 0.8  : newsRiskLevel == 2 ? 0.5  : 0.25
+newsTimeDecay      = newsHoursUntil <= 2 ? 0.5 : newsHoursUntil <= 4 ? 0.7 : newsHoursUntil <= 8 ? 0.85 : 1.0
+newsEffectiveConf  = newsConfidenceMult * newsTimeDecay
+newsEffectiveRisk  = newsRiskMult * newsTimeDecay
+newsRiskText  = newsRiskLevel == 0 ? "LOW RISK" : newsRiskLevel == 1 ? "MODERATE RISK" : newsRiskLevel == 2 ? "HIGH RISK" : "EXTREME RISK"
+newsRiskColor = newsRiskLevel == 0 ? cBull : newsRiskLevel == 1 ? cTeal : newsRiskLevel == 2 ? cWarning : cBear
+
+//=====================================================================
+// ENHANCED EXECUTION QUALITY (7 factors) (v19)
+//=====================================================================
+
+macroQualityScore = math.abs(macroStrengthScore) > 30 ? 100 : math.abs(macroStrengthScore) > 15 ? 75 : math.abs(macroStrengthScore) > 5 ? 50 : 25
+volQualityScore   = volStateNormal ? 100 : volStateCalm ? 80 : volStateElevated ? 60 : volStateExplosive ? 30 : 50
+execScoreRaw_v19  = (liqDistScore * 20.0 / 100.0) + (vwapDistScore * 15.0 / 100.0) + (htfAlignScore * 20.0 / 100.0) + (zoneScore * 15.0 / 100.0) + (sessionScore * 10.0 / 100.0) + (macroQualityScore * 10.0 / 100.0) + (volQualityScore * 10.0 / 100.0)
+executionScore_v19 = int(math.min(math.max(execScoreRaw_v19, 0.0), 100.0))
+execGrade_v19  = executionScore_v19 >= 85 ? "ELITE" : executionScore_v19 >= 75 ? "A+" : executionScore_v19 >= 60 ? "A" : executionScore_v19 >= 45 ? "B" : executionScore_v19 >= 30 ? "C" : "D"
+execColor_v19  = executionScore_v19 >= 85 ? cTierS : executionScore_v19 >= 75 ? cTierA : executionScore_v19 >= 60 ? cBull : executionScore_v19 >= 45 ? cTeal : cWarning
+
+//=====================================================================
+// PHASE 1 — REGIME-DYNAMIC COMPOSITE SCORE (v25)
+// Calculated after flow, liquidity, and execution components exist.
+//=====================================================================
+
+float _nStruct = math.max(math.min(float(structureScore), 100.0), 0.0)
+float _nFlow   = math.max(math.min(float(flowScore), 100.0), 0.0)
+float _nMacro  = math.max(math.min(float(math.abs(macroStrengthScore)), 100.0), 0.0)
+float _nLiq    = math.max(math.min(liqMagnetScore, 100.0), 0.0)
+float _nExec   = math.max(math.min(float(executionScore_v19), 100.0), 0.0)
+float _nCorr   = math.max(math.min(avgCorrHealth, 100.0), 0.0)
+float _nVol    = volStateExplosive ? 20.0 : volStateElevated ? 50.0 : volStateNormal ? 80.0 : 100.0
+
+float _wS = 0.0
+float _wF = 0.0
+float _wM = 0.0
+float _wL = 0.0
+float _wE = 0.0
+float _wC = 0.0
+float _wV = 0.0
+
+if isRegimeTrendExp
+    _wS := 0.30
+    _wM := 0.25
+    _wF := 0.15
+    _wL := 0.15
+    _wE := 0.10
+    _wC := 0.03
+    _wV := 0.02
+else if isRegimeTrendCon
+    _wS := 0.28
+    _wM := 0.20
+    _wF := 0.20
+    _wL := 0.15
+    _wE := 0.12
+    _wC := 0.03
+    _wV := 0.02
+else if isRegimeTrendExh
+    _wS := 0.20
+    _wM := 0.15
+    _wF := 0.20
+    _wL := 0.20
+    _wE := 0.18
+    _wC := 0.05
+    _wV := 0.02
+else if isRegimeRangeAcc or isRegimeRangeDis
+    _wS := 0.13
+    _wM := 0.13
+    _wF := 0.23
+    _wL := 0.33
+    _wE := 0.10
+    _wC := 0.05
+    _wV := 0.03
+else if isRegimeVolExp
+    _wS := 0.13
+    _wM := 0.20
+    _wF := 0.13
+    _wL := 0.18
+    _wE := 0.28
+    _wC := 0.05
+    _wV := 0.03
+else if isRegimeVolComp
+    _wS := 0.23
+    _wM := 0.13
+    _wF := 0.18
+    _wL := 0.28
+    _wE := 0.10
+    _wC := 0.05
+    _wV := 0.03
+else
+    _wS := 0.23
+    _wM := 0.18
+    _wF := 0.18
+    _wL := 0.18
+    _wE := 0.15
+    _wC := 0.05
+    _wV := 0.03
+
+compositeRaw   = (_nStruct * _wS) + (_nFlow * _wF) + (_nMacro * _wM) + (_nLiq * _wL) + (_nExec * _wE) + (_nCorr * _wC) + (_nVol * _wV)
+compositeScore = int(math.min(math.max(compositeRaw, 0), 100))
+compositeGrade = compositeScore >= 90 ? "ELITE" : compositeScore >= 80 ? "A+" : compositeScore >= 70 ? "A" : compositeScore >= 60 ? "B" : compositeScore >= 50 ? "C" : "AVOID"
+compositeColor = compositeScore >= 90 ? cTierS : compositeScore >= 80 ? cTierA : compositeScore >= 70 ? cBull : compositeScore >= 60 ? cTeal : compositeScore >= 50 ? cWarning : cBear
+compositeDirection = structureDirection == "BULLISH" and flowDirection == "BUYING" ? "BULLISH" : structureDirection == "BEARISH" and flowDirection == "SELLING" ? "BEARISH" : "MIXED"
+
+//=====================================================================
+// PHASE 2 — BIAS CONFIDENCE ENGINE (v25)
+// 4-level confidence: LOW / MEDIUM / HIGH / VERY HIGH
+// Based on: HTF alignment + Macro alignment + Liquidity proximity
+//           + Volatility state + Execution quality
+// Each factor contributes to a 0-100 raw score, then bucketed.
+//=====================================================================
+
+_bcHTF    = (htfAlignmentLong >= 3 or htfAlignmentShort >= 3) ? 30 : (htfAlignmentLong >= 2 or htfAlignmentShort >= 2) ? 20 : (htfAlignmentLong >= 1 or htfAlignmentShort >= 1) ? 10 : 0
+_bcMacro  = math.abs(macroStrengthScore) > 40 ? 25 : math.abs(macroStrengthScore) > 20 ? 15 : math.abs(macroStrengthScore) > 5 ? 8 : 0
+_bcLiq    = liqTargetValid and liqMagnetScore > 70 ? 20 : liqTargetValid and liqMagnetScore > 40 ? 12 : liqTargetValid ? 6 : 0
+_bcVol    = volStateNormal ? 15 : volStateCalm ? 12 : volStateElevated ? 5 : 0
+_bcExec   = executionScore_v19 >= 75 ? 10 : executionScore_v19 >= 55 ? 7 : executionScore_v19 >= 40 ? 3 : 0
+
+biasConfScore = math.min(_bcHTF + _bcMacro + _bcLiq + _bcVol + _bcExec, 100)
+biasConfLevel = biasConfScore >= 75 ? "VERY HIGH" : biasConfScore >= 55 ? "HIGH" : biasConfScore >= 35 ? "MEDIUM" : "LOW"
+biasConfColor = biasConfScore >= 75 ? cBull : biasConfScore >= 55 ? cTeal : biasConfScore >= 35 ? cWarning : cBear
+
+//=====================================================================
+// PHASE 5 — SIGNAL QUALITY FILTER v2 (v25)
+// Rejects signals when any of the following are true:
+//   • Execution Grade < B (executionScore_v19 < 45)
+//   • Bias Confidence LOW
+//   • Macro Conflict Severe (macro contradicts direction strongly)
+//   • Risk State LOCKDOWN
+//   • Correlation Breakdown Active
+// signalQualityScore 0-100 computed and displayed.
+//=====================================================================
+
+_sqExecOk  = executionScore_v19 >= 45  // B or better
+_sqBiasOk  = biasConfLevel != "LOW"
+_sqMacroOk = not (macroContradiction and math.abs(macroStrengthScore) > 40)
+_sqRiskOk  = not (showPropMode and propRiskState == "LOCKDOWN")
+_sqCorrOk  = not corrBreakdown
+
+// Quality score: additive from passing gates
+signalQualityScore = 0
+signalQualityScore += _sqExecOk  ? 25 : 0
+signalQualityScore += _sqBiasOk  ? 25 : 0
+signalQualityScore += _sqMacroOk ? 25 : 0
+signalQualityScore += _sqRiskOk  ? 15 : 0
+signalQualityScore += _sqCorrOk  ? 10 : 0
+
+signalQualityGate   = _sqExecOk and _sqBiasOk and _sqMacroOk and _sqRiskOk and _sqCorrOk
+signalQualityColor  = signalQualityScore >= 85 ? cBull : signalQualityScore >= 65 ? cTeal : signalQualityScore >= 40 ? cWarning : cBear
+signalQualityText   = signalQualityScore >= 85 ? "ELITE" : signalQualityScore >= 65 ? "GOOD" : signalQualityScore >= 40 ? "WEAK" : "BLOCKED"
+
+//=====================================================================
+// FUTURE PATH MODEL
+//=====================================================================
+
+recentLow20  = ta.lowest(low, 20)
+recentHigh20 = ta.highest(high, 20)
+invalidationBull = not na(lastBrokenSup) ? lastBrokenSup : not na(recentLow20) ? recentLow20 : close - adaptiveATR * 3
+invalidationBear = not na(lastBrokenRes) ? lastBrokenRes : not na(recentHigh20) ? recentHigh20 : close + adaptiveATR * 3
+invalidationLevel = compositeDirection == "BULLISH" ? invalidationBull : compositeDirection == "BEARISH" ? invalidationBear : close
+pathTargetBull = not na(liqTargetPrice) and liqTargetValid and compositeDirection == "BULLISH" ? liqTargetPrice : not na(resistanceLevel) ? resistanceLevel : close + adaptiveATR * 3
+pathTargetBear = not na(liqTargetPrice) and liqTargetValid and compositeDirection == "BEARISH" ? liqTargetPrice : not na(supportLevel) ? supportLevel : close - adaptiveATR * 3
+pathTarget = compositeDirection == "BULLISH" ? pathTargetBull : compositeDirection == "BEARISH" ? pathTargetBear : close
+
+//=====================================================================
+// ENHANCED ADAPTIVE RISK (v19)
+//=====================================================================
+
+volOfVol = ta.stdev(adaptiveATR, 20)
+volOfVolElevated = volOfVol > ta.sma(volOfVol, 50) * 1.5
+volOfVolMult = volOfVolElevated ? 0.7 : 1.0
+macroRiskMult = math.abs(macroStrengthScore) > 50 ? 0.85 : math.abs(macroStrengthScore) > 30 ? 0.95 : 1.0
+recommendedRisk_v19 = recommendedRisk * macroRiskMult * volOfVolMult * newsEffectiveRisk
+recommendedRisk_v19 := recommendedRisk > 0 ? math.max(math.min(recommendedRisk_v19, 3.0), 0.1) : 0.0
+
+//=====================================================================
+// PROP FIRM ENGINE 2.0 (v25)
+// State and capacity are calculated immediately after the equity curve
+// so downstream risk and signal-quality logic use current values.
+//=====================================================================
+
+// Legacy aliases for compatibility — direct threshold checks (display only)
+dailyStatus  = dailyDD > propDailyLimit ? "BREACHED" : dailyDD > propDailyLimit * 0.8 ? "WARNING" : "SAFE"
+weeklyStatus = weeklyDD > propWeeklyLimit ? "BREACHED" : weeklyDD > propWeeklyLimit * 0.8 ? "WARNING" : "SAFE"
+maxDDStatus  = maxDrawdown > propMaxLimit ? "BREACHED" : maxDrawdown > propMaxLimit * 0.8 ? "WARNING" : "SAFE"
+propStatusColor = propRiskColor
+propRestrict    = showPropMode and propRiskState == "LOCKDOWN"
+propOnlyHigh    = showPropMode and (propRiskState == "RESTRICTED") and propOnlyHighTier
+
+//=====================================================================
+// FIX 3: SINGLE-DEFINITION FINAL ALERT GATES
+// v19 assigned alertBullHigh/alertBearHigh three times: initial
+// definition, then silent overrides in News Risk and Prop Firm blocks.
+// Any code between assignments saw inconsistent state.
+// Fixed: compute news-filtered and prop-filtered values once, clearly,
+// and use the final vars everywhere downstream.
+//=====================================================================
+
+// News filter: suppress lower tiers when risk is elevated
+bool _newsAllowB = newsRiskLevel < 3   // level 3 = only S/A allowed
+bool _newsAllowC = newsRiskLevel < 2   // level 2+ = suppress C
+
+bool alertBullS_f = alertBullS
+bool alertBearS_f = alertBearS
+bool alertBullA_f = alertBullA
+bool alertBearA_f = alertBearA
+bool alertBullB_f = _newsAllowB ? alertBullB : false
+bool alertBearB_f = _newsAllowB ? alertBearB : false
+bool alertBullC_f = _newsAllowC ? alertBullC : false
+bool alertBearC_f = _newsAllowC ? alertBearC : false
+
+// Prop firm filter: suppress when breached/warning
+bool alertBullS_fp = propRestrict ? false : alertBullS_f
+bool alertBearS_fp = propRestrict ? false : alertBearS_f
+bool alertBullA_fp = propRestrict ? false : alertBullA_f
+bool alertBearA_fp = propRestrict ? false : alertBearA_f
+bool alertBullB_fp = (propRestrict or propOnlyHigh) ? false : alertBullB_f
+bool alertBearB_fp = (propRestrict or propOnlyHigh) ? false : alertBearB_f
+bool alertBullC_fp = (propRestrict or propOnlyHigh) ? false : alertBullC_f
+bool alertBearC_fp = (propRestrict or propOnlyHigh) ? false : alertBearC_f
+
+// Single authoritative final values — used everywhere below
+// v25: additionally gated by signalQualityGate (Phase 5)
+bool alertBullHigh = (alertBullS_fp or alertBullA_fp or alertBullB_fp) and signalQualityGate
+bool alertBearHigh = (alertBearS_fp or alertBearA_fp or alertBearB_fp) and signalQualityGate
+bool finalApprovedBull = barstate.isconfirmed and alertBullHigh and signalValid
+bool finalApprovedBear = barstate.isconfirmed and alertBearHigh and signalValid
+
+plotshape(alertBullS_fp and finalApprovedBull and not (perfMode and perfReduceVis), style=shape.diamond,      location=location.belowbar, color=cTierS, size=size.large,  title="S-Grade Long")
+plotshape(alertBearS_fp and finalApprovedBear and not (perfMode and perfReduceVis), style=shape.diamond,      location=location.abovebar, color=cTierS, size=size.large,  title="S-Grade Short")
+plotshape(alertBullA_fp and finalApprovedBull and not (perfMode and perfReduceVis), style=shape.triangleup,   location=location.belowbar, color=cTierA, size=size.large,  title="A-Grade Long")
+plotshape(alertBearA_fp and finalApprovedBear and not (perfMode and perfReduceVis), style=shape.triangledown, location=location.abovebar, color=cTierA, size=size.large,  title="A-Grade Short")
+plotshape(alertBullB_fp and finalApprovedBull and not (perfMode and perfReduceVis), style=shape.triangleup,   location=location.belowbar, color=cTierB, size=size.normal, title="B-Grade Long")
+plotshape(alertBearB_fp and finalApprovedBear and not (perfMode and perfReduceVis), style=shape.triangledown, location=location.abovebar, color=cTierB, size=size.normal, title="B-Grade Short")
+
+// Open tracked trades only after all validation, news, prop, and quality gates.
+newBullSignal = finalApprovedBull and not signalOpen
+newBearSignal = finalApprovedBear and not signalOpen
+if newBullSignal
+    float _entryRiskDist = close - longStopLoss
+    float _entryRiskCash = accountSize * (recommendedRisk_v19 / 100.0)
+    float _entryQty = _entryRiskDist > 0 ? _entryRiskCash / _entryRiskDist : na
+    if not na(_entryQty) and _entryQty > 0
+        totalSignals  := totalSignals + 1
+        totalLongs    := totalLongs + 1
+        signalOpen    := true
+        signalWasBull := true
+        signalWasBear := false
+        signalOpenBar := bar_index
+        entryPrice    := close
+        entryStop     := longStopLoss
+        entryTarget   := longTakeProfit
+        entryQtyOz    := _entryQty
+        entryRiskUsd  := _entryRiskCash
+        flipCount     := 0
+        lastLongSignalBar := bar_index
+if newBearSignal
+    float _entryRiskDist = shortStopLoss - close
+    float _entryRiskCash = accountSize * (recommendedRisk_v19 / 100.0)
+    float _entryQty = _entryRiskDist > 0 ? _entryRiskCash / _entryRiskDist : na
+    if not na(_entryQty) and _entryQty > 0
+        totalSignals  := totalSignals + 1
+        totalShorts   := totalShorts + 1
+        signalOpen    := true
+        signalWasBull := false
+        signalWasBear := true
+        signalOpenBar := bar_index
+        entryPrice    := close
+        entryStop     := shortStopLoss
+        entryTarget   := shortTakeProfit
+        entryQtyOz    := _entryQty
+        entryRiskUsd  := _entryRiskCash
+        flipCount     := 0
+        lastShortSignalBar := bar_index
+
+// ===== DASHBOARD V25 — ELITE INSTITUTIONAL TERMINAL =====
+// TOP-CENTER : 9 cols × 6 rows
+//   Row 0 — Label headers (size.small for readability)
+//   Row 1 — Executive values: Signal|Score|Regime|Status|Risk|LiqTarget|Vol|BiasConf|MTF
+//   Row 2 — Separator
+//   Row 3 — MTF Status (cols 0-5) + Core Asset Matrix (cols 6-8, guarded by showMacroExpanded)
+//   Row 4 — Separator
+//   Row 5 — Market Intelligence dim strip
+// BOTTOM-CENTER: Horizontal Trade Plan strip (10 cols × 2 rows)
+// BOTTOM-LEFT  : Risk Management panel (showRisk, default OFF)
+// OPTIONAL     : Analytics Panel (showAnalyticsPanel, default OFF)
+// v25 changes:
+//   - Labels: size.small (was size.tiny) for readability
+//   - Values: size.normal on desktop (was size.small)
+//   - Row heights tighter (less padding via bgcolor only, no filler rows)
+//   - BiasConf replaces raw Probability in Row 1
+//   - signalQualityScore shown in bottom strip
+//   - propRiskState shown in Risk panel
+
+//=====================================================================
+// RESPONSIVE CONFIGURATION
+//=====================================================================
+
+_sizeTiny   = mobileMode ? size.tiny  : size.small
+_sizeSmall  = mobileMode ? size.tiny  : size.small
+_sizeNormal = mobileMode ? size.small : size.normal
+_sizeLarge  = mobileMode ? size.normal : size.large
+
+//=====================================================================
+// COLOR SYSTEM
+//=====================================================================
+
+_bgBanner    = color.new(#080D1A, 0)
+_bgState     = color.new(#0D1526, 0)
+_bgProb      = color.new(#0A1020, 0)
+_bgSep       = color.new(#1E293B, 0)
+_bgRisk      = color.new(#080D1A, 0)
+_bgHdr       = color.new(#0A0F1E, 0)
+_bgStrip     = color.new(#080D1A, 0)
+
+_acBull      = color.new(#10B981, 0)
+_acBear      = color.new(#DC2626, 0)
+_acNeutral   = color.new(#94A3B8, 0)
+_acWarning   = color.new(#F59E0B, 0)
+_acInfo      = color.new(#3B82F6, 0)
+_acPurple    = color.new(#8B5CF6, 0)
+_acTeal      = color.new(#14B8A6, 0)
+
+_txtPrimary  = color.new(#F1F5F9, 0)
+_txtMuted    = color.new(#94A3B8, 0)
+_txtDim      = color.new(#64748B, 0)
+_txtDeep     = color.new(#334155, 0)
+
+_cellBull    = color.new(#10B981, 78)
+_cellBear    = color.new(#DC2626, 78)
+_cellNeutral = color.new(#334155, 55)
+_cellWarn    = color.new(#F59E0B, 82)
+_cellInfo    = color.new(#3B82F6, 78)
+_cellPurple  = color.new(#8B5CF6, 78)
+_cellTeal    = color.new(#14B8A6, 78)
+
+//=====================================================================
+// SHARED DATA PREPARATION
+//=====================================================================
+
+_setupMain = alertBullS_fp ? "S-LONG" : alertBearS_fp ? "S-SHORT" : alertBullA_fp ? "A-LONG" : alertBearA_fp ? "A-SHORT" : alertBullB_fp ? "B-LONG" : alertBearB_fp ? "B-SHORT" : "WAIT"
+_setupText = _setupMain
+_setupDir  = alertBullHigh ? "LONG" : alertBearHigh ? "SHORT" : "WAIT"
+_execBg    = alertBullHigh ? _cellBull : alertBearHigh ? _cellBear : _cellNeutral
+_execFg    = alertBullHigh ? _acBull   : alertBearHigh ? _acBear   : _txtMuted
+
+_gradeBg = compositeScore >= 90 ? color.new(#F8FAFC, 85) : compositeScore >= 80 ? color.new(#FBBF24, 85) : compositeScore >= 70 ? color.new(#10B981, 85) : compositeScore >= 60 ? color.new(#14B8A6, 85) : compositeScore >= 50 ? color.new(#F59E0B, 85) : color.new(#DC2626, 85)
+_gradeFg = compositeScore >= 90 ? _txtPrimary : compositeScore >= 80 ? _acWarning : compositeScore >= 70 ? _acBull : compositeScore >= 60 ? _acTeal : compositeScore >= 50 ? _acWarning : _acBear
+
+_regimeStrip = regimeText20 == "TREND EXPANSION" ? "Trend Exp" : regimeText20 == "TREND CONTINUATION" ? "Trend Cont" : regimeText20 == "TREND EXHAUSTION" ? "Trend Exh" : regimeText20 == "RANGE ACCUMULATION" ? "Range Acc" : regimeText20 == "RANGE DISTRIBUTION" ? "Range Dist" : regimeText20 == "VOL COMPRESSION" ? "Vol Comp" : regimeText20 == "VOL EXPANSION" ? "Vol Exp" : regimeText20
+_volStrip    = volStateExplosive ? "Explosive" : volStateElevated ? "Elevated" : volStateNormal ? "Normal" : "Calm"
+
+_probDomText = probBull >= probBear and probBull >= probRange ? "Bull Bias " + str.tostring(math.round(probBull)) + "%" : probBear >= probBull and probBear >= probRange ? "Bear Bias " + str.tostring(math.round(probBear)) + "%" : "Range Bias " + str.tostring(math.round(probRange)) + "%"
+_probDomClr  = probBull >= probBear and probBull >= probRange ? _acBull : probBear >= probBull and probBear >= probRange ? _acBear : _acWarning
+
+_htfScore    = htfAlignmentLong >= htfAlignmentShort ? htfAlignmentLong : htfAlignmentShort
+_htfFull     = str.tostring(_htfScore) + " / 3"
+
+// PHASE 6 — Full 5-timeframe HTF Confluence % (5M, 15M, 1H, 4H, 1D)
+_htf5Bull = (htf5mBull ? 1 : 0) + (htf15mBull ? 1 : 0) + (htf1hBull ? 1 : 0) + (htf4hBull ? 1 : 0) + (htfDBull ? 1 : 0)
+_htf5Bear = (htf5mBear ? 1 : 0) + (htf15mBear ? 1 : 0) + (htf1hBear ? 1 : 0) + (htf4hBear ? 1 : 0) + (htfDBear ? 1 : 0)
+_htf5Max  = math.max(_htf5Bull, _htf5Bear)
+_htfAvailableCount = (htf5mAvailable ? 1 : 0) + (htf15mAvailable ? 1 : 0) + (htf1hAvailable ? 1 : 0) + (htf4hAvailable ? 1 : 0) + (htfDAvailable ? 1 : 0)
+htfConfluencePct = _htfAvailableCount > 0 ? int(_htf5Max / float(_htfAvailableCount) * 100) : 0
+htfConfluenceDir = _htf5Bull > _htf5Bear ? "Bull" : _htf5Bear > _htf5Bull ? "Bear" : "Mixed"
+htfTrendContProb = htfConfluencePct >= 80 ? "Very High" : htfConfluencePct >= 60 ? "High" : htfConfluencePct >= 40 ? "Moderate" : "Low"
+
+_probBullStr  = str.tostring(math.round(probBull))  + "%"
+_probBearStr  = str.tostring(math.round(probBear))  + "%"
+_probRangeStr = str.tostring(math.round(probRange)) + "%"
+
+_mloStrip = mostLikelyOutcome == "BULL CONTINUATION" ? "Bull Cont" : mostLikelyOutcome == "BEAR REVERSAL" ? "Bear Rev" : "Range Bound"
+_mloBg    = mostLikelyOutcome == "BULL CONTINUATION" ? _cellBull : mostLikelyOutcome == "BEAR REVERSAL" ? _cellBear : _cellWarn
+_mloFg    = mostLikelyOutcome == "BULL CONTINUATION" ? _acBull   : mostLikelyOutcome == "BEAR REVERSAL" ? _acBear   : _acWarning
+
+_newsStrip    = newsRiskLevel == 0 ? "Low" : newsRiskLevel == 1 ? "Moderate" : newsRiskLevel == 2 ? "High" : "Extreme"
+_newsFullText = _newsStrip
+_newsClr      = newsRiskLevel == 0 ? _acBull : newsRiskLevel == 1 ? _acWarning : _acBear
+
+_statusStrip = signalBlocked ? "BLOCKED" : signalWeak ? "WEAK" : (alertBullHigh or alertBearHigh) ? "READY" : "WAIT"
+_statBg      = signalBlocked ? _cellBear  : signalWeak ? _cellWarn : (alertBullHigh or alertBearHigh) ? _cellBull : _cellNeutral
+_statFg      = signalBlocked ? _acBear    : signalWeak ? _acWarning : (alertBullHigh or alertBearHigh) ? _acBull   : _txtMuted
+
+_riskClr  = recommendedRisk_v19 > 1.5 ? _acWarning : _acBull
+_confClr  = alertConfidenceFinal >= 65 ? _acBull : alertConfidenceFinal >= 45 ? _acWarning : _acBear
+
+_macroLabel = macroStrengthScore > 40 ? "Str Bull" : macroStrengthScore > 20 ? "Bullish" : macroStrengthScore < -40 ? "Str Bear" : macroStrengthScore < -20 ? "Bearish" : "Neutral"
+_flowStrip  = flowScore >= 75 ? (flowDirection == "BUYING" ? "Inst Buy" : "Inst Sell") : flowScore >= 50 ? (flowDirection == "BUYING" ? "Mod Buy" : "Mod Sell") : "Neutral"
+_liqStrip   = liqTargetValid ? liqTargetText + " (" + str.tostring(math.round(liqMagnetScore)) + ")" : "No Target"
+
+_corrFull = corrStabilityText == "STABLE" ? "Stable" : corrStabilityText == "MODERATE" ? "Moderate" : "Unstable"
+_corrClr  = corrStabilityText == "STABLE" ? _acBull  : corrStabilityText == "MODERATE" ? _acWarning : _acBear
+
+_isLong = bullScore > bearScore
+_slVal  = _isLong ? longStopLoss     : shortStopLoss
+_tpVal  = _isLong ? longTakeProfit   : shortTakeProfit
+_posVal = _isLong ? longPositionSize : shortPositionSize
+_slStr  = not na(_slVal)  ? str.tostring(_slVal,  "#.##") : "—"
+_tpStr  = not na(_tpVal)  ? str.tostring(_tpVal,  "#.##") : "—"
+_posStr = not na(_posVal) ? str.tostring(math.round(_posVal)) + " oz" : "—"
+_rrStr  = not na(_slVal) and not na(_tpVal) and math.abs(_slVal - close) > 0 ? "1 : " + str.tostring(math.abs(_tpVal - close) / math.abs(_slVal - close), "#.#") : "—"
+_wrStr  = _totalClosed > 0 ? str.tostring(math.round(winRate)) + "%" : "—"
+_pfStr  = profitFactor > 0 ? str.tostring(profitFactor, "#.##") : "—"
+
+_mtf5mStr  = htf5mBull  ? "▲" : htf5mBear  ? "▼" : "—"
+_mtf15mStr = htf15mBull ? "▲" : htf15mBear ? "▼" : "—"
+_mtf1hStr  = htf1hBull  ? "▲" : htf1hBear  ? "▼" : "—"
+_mtf4hStr  = htf4hBull  ? "▲" : htf4hBear  ? "▼" : "—"
+_mtf1dStr  = htfDBull   ? "▲" : htfDBear   ? "▼" : "—"
+_mtf5mClr  = htf5mBull  ? _acBull : htf5mBear  ? _acBear : _txtDim
+_mtf15mClr = htf15mBull ? _acBull : htf15mBear ? _acBear : _txtDim
+_mtf1hClr  = htf1hBull  ? _acBull : htf1hBear  ? _acBear : _txtDim
+_mtf4hClr  = htf4hBull  ? _acBull : htf4hBear  ? _acBear : _txtDim
+_mtf1dClr  = htfDBull   ? _acBull : htfDBear   ? _acBear : _txtDim
+_mtf5mBg   = htf5mBull  ? _cellBull : htf5mBear  ? _cellBear : _cellNeutral
+_mtf15mBg  = htf15mBull ? _cellBull : htf15mBear ? _cellBear : _cellNeutral
+_mtf1hBg   = htf1hBull  ? _cellBull : htf1hBear  ? _cellBear : _cellNeutral
+_mtf4hBg   = htf4hBull  ? _cellBull : htf4hBear  ? _cellBear : _cellNeutral
+_mtf1dBg   = htfDBull   ? _cellBull : htfDBear   ? _cellBear : _cellNeutral
+
+_tierStr = alertBullS_fp or alertBearS_fp ? "S" : alertBullA_fp or alertBearA_fp ? "A" : alertBullB_fp or alertBearB_fp ? "B" : alertBullC_fp or alertBearC_fp ? "C" : "—"
+_tierClr = _tierStr == "S" ? cTierS : _tierStr == "A" ? cTierA : _tierStr == "B" ? _acNeutral : _txtDim
+
+//=====================================================================
+// TOP-CENTER COMMAND CENTER — v25 ELITE TERMINAL
+// 9 cols × 6 rows
+// Row 0 — Label headers (size.small — larger than v24 for readability)
+// Row 1 — Executive values (size.normal — larger values)
+// Row 2 — Separator
+// Row 3 — MTF Status + Core Asset Matrix (guarded)
+// Row 4 — Separator
+// Row 5 — Market Intelligence (size.small)
+//=====================================================================
+
+var table cc = table.new(
+     position.top_center, 9, 6,
+     bgcolor=_bgBanner,
+     frame_color=color.new(#1E293B, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var int    _lastDashComposite = -1
+var string _lastDashSetup     = ""
+var string _lastDashRegime    = ""
+var int    _lastDashConf      = -1
+var bool   dashInitialized    = false
+
+bool dashRefresh = barstate.islast and (not dashInitialized or compositeScore != _lastDashComposite or _setupText != _lastDashSetup or regimeText20 != _lastDashRegime or alertConfidenceFinal != _lastDashConf)
+
+// ── ROW 0 — Label headers (size.small for readability) ────────────
+if showDashboard and dashRefresh and not mobileMode
+    _lastDashComposite := compositeScore
+    _lastDashSetup     := _setupText
+    _lastDashRegime    := regimeText20
+    _lastDashConf      := alertConfidenceFinal
+    dashInitialized    := true
+
+    table.cell(cc, 0, 0, "Signal",        text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 1, 0, "Score",         text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 2, 0, "Regime",        text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 3, 0, "Status",        text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 4, 0, "Risk",          text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 5, 0, "Liq Target",    text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 6, 0, "Volatility",    text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 7, 0, "Bias Conf",     text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+    table.cell(cc, 8, 0, "MTF",           text_color=_txtMuted, text_size=size.small, bgcolor=_bgHdr, text_halign=text.align_center)
+
+// ── ROW 1 — Executive values (size.normal) ────────────────────────
+if showDashboard and dashRefresh and not mobileMode
+    table.cell(cc, 0, 1, _setupDir,
+         text_color=_execFg, text_size=_sizeNormal, bgcolor=_execBg, text_halign=text.align_center)
+    table.cell(cc, 1, 1, str.tostring(compositeScore) + "/100",
+         text_color=compositeColor, text_size=_sizeNormal, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 2, 1, _regimeStrip,
+         text_color=regimeColor20, text_size=_sizeSmall, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 3, 1, _statusStrip,
+         text_color=_statFg, text_size=_sizeNormal, bgcolor=_statBg, text_halign=text.align_center)
+    table.cell(cc, 4, 1, _newsStrip,
+         text_color=_newsClr, text_size=_sizeNormal, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 5, 1, _liqStrip,
+         text_color=liqTargetValid ? _acInfo : _txtDim, text_size=_sizeSmall, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 6, 1, _volStrip,
+         text_color=_txtMuted, text_size=_sizeNormal, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 7, 1, biasConfLevel,
+         text_color=biasConfColor, text_size=_sizeNormal, bgcolor=_bgBanner, text_halign=text.align_center)
+    table.cell(cc, 8, 1, _htfFull,
+         text_color=_acPurple, text_size=_sizeNormal, bgcolor=color.new(#3B0764, 70), text_halign=text.align_center)
+
+// ── ROW 2 — Separator ─────────────────────────────────────────────
+if showDashboard and dashRefresh and not mobileMode
+    for _c = 0 to 8
+        table.cell(cc, _c, 2, "", bgcolor=_bgSep, text_size=size.tiny)
+
+// ── ROW 3 — MTF STATUS (cols 0-5) + CORE ASSET MATRIX (cols 6-8) ──
+if showDashboard and dashRefresh and not mobileMode
+    // MTF header + 5 timeframes (size.small labels, size.normal arrows)
+    table.cell(cc, 0, 3, "MTF " + str.tostring(htfConfluencePct) + "%\n" + htfConfluenceDir,
+         text_color=_acPurple, text_size=size.small, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_center)
+    table.cell(cc, 1, 3, "5M\n"  + _mtf5mStr,
+         text_color=_mtf5mClr,  text_size=size.small, bgcolor=_mtf5mBg,  text_halign=text.align_center)
+    table.cell(cc, 2, 3, "15M\n" + _mtf15mStr,
+         text_color=_mtf15mClr, text_size=size.small, bgcolor=_mtf15mBg, text_halign=text.align_center)
+    table.cell(cc, 3, 3, "1H\n"  + _mtf1hStr,
+         text_color=_mtf1hClr,  text_size=size.small, bgcolor=_mtf1hBg,  text_halign=text.align_center)
+    table.cell(cc, 4, 3, "4H\n"  + _mtf4hStr,
+         text_color=_mtf4hClr,  text_size=size.small, bgcolor=_mtf4hBg,  text_halign=text.align_center)
+    table.cell(cc, 5, 3, "1D\n"  + _mtf1dStr,
+         text_color=_mtf1dClr,  text_size=size.small, bgcolor=_mtf1dBg,  text_halign=text.align_center)
+
+    // Core Asset Matrix — guarded by showMacroExpanded
+    _camDxyUp  = showMacroExpanded and not dxyBear
+    _camDxyStr = showMacroExpanded ? (_camDxyUp ? "DXY ▲\nBull" : "DXY ▼\nBear") : "DXY\nN/A"
+    _camDxyClr = showMacroExpanded ? (_camDxyUp ? _acBull : _acBear) : _txtDim
+    _camBtcStr = showMacroExpanded ? (btcBull ? "BTC ▲\nBull" : "BTC ▼\nBear") : "BTC\nN/A"
+    _camBtcClr = showMacroExpanded ? (btcBull ? _acBull : _acBear) : _txtDim
+    _camSlvStr = showMacroExpanded ? (silverClose > silverEMA ? "SILVER ▲\nBull" : "SILVER ▼\nBear") : "SILVER\nN/A"
+    _camSlvClr = showMacroExpanded ? (silverClose > silverEMA ? _acBull : _acBear) : _txtDim
+    _camBg     = showMacroExpanded ? _bgState : color.new(#0A0F1E, 0)
+
+    table.cell(cc, 6, 3, _camDxyStr, text_color=_camDxyClr, text_size=size.small, bgcolor=_camBg, text_halign=text.align_center)
+    table.cell(cc, 7, 3, _camBtcStr, text_color=_camBtcClr, text_size=size.small, bgcolor=_camBg, text_halign=text.align_center)
+    table.cell(cc, 8, 3, _camSlvStr, text_color=_camSlvClr, text_size=size.small, bgcolor=_camBg, text_halign=text.align_center)
+
+// ── ROW 4 — Separator ─────────────────────────────────────────────
+if showDashboard and dashRefresh and not mobileMode
+    for _c = 0 to 8
+        table.cell(cc, _c, 4, "", bgcolor=_bgSep, text_size=size.tiny)
+
+// ── ROW 5 — Market Intelligence strip (size.small) ────────────────
+if showDashboard and dashRefresh and not mobileMode
+    _bullClr  = probBull  > probBear  and probBull  > probRange ? _acBull    : _txtDim
+    _bearClr  = probBear  > probBull  and probBear  > probRange ? _acBear    : _txtDim
+    _rangeClr = probRange > probBull  and probRange > probBear  ? _acWarning : _txtDim
+
+    table.cell(cc, 0, 5, str.tostring(macroStrengthScore) + " " + _macroLabel,
+         text_color=macroStrengthColor, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 1, 5, str.tostring(structureScore) + " " + structureDirection,
+         text_color=structureColorCat, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 2, 5, _flowStrip,
+         text_color=flowColorCat, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 3, 5, "Bull " + _probBullStr,
+         text_color=_bullClr, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 4, 5, "Bear " + _probBearStr,
+         text_color=_bearClr, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 5, 5, "Range " + _probRangeStr,
+         text_color=_rangeClr, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 6, 5, _mloStrip,
+         text_color=_mloFg, text_size=size.small, bgcolor=_mloBg, text_halign=text.align_center)
+    table.cell(cc, 7, 5, "News " + _newsStrip,
+         text_color=_newsClr, text_size=size.small, bgcolor=_bgProb, text_halign=text.align_center)
+    table.cell(cc, 8, 5, _statusStrip,
+         text_color=_statFg, text_size=size.small, bgcolor=_statBg, text_halign=text.align_center)
+
+//=====================================================================
+// BOTTOM-CENTER: HORIZONTAL TRADE PLAN STRIP — v25
+// 10 cols × 2 rows (label row + value row)
+// Added: Signal Quality column; size.small labels, size.normal values
+//=====================================================================
+
+var table tradeDash = table.new(
+     position.bottom_center, 10, 2,
+     bgcolor=_bgStrip,
+     frame_color=color.new(#1E293B, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool tradeInitialized = false
+var int  _lastTradeUpdate = -999
+bool tradeRefresh = barstate.islast and (not tradeInitialized or bar_index - _lastTradeUpdate >= 3)
+
+if showDashboard and tradeRefresh and not mobileMode
+    _lastTradeUpdate := bar_index
+    tradeInitialized := true
+
+    // Row 0 — Labels (size.small)
+    table.cell(tradeDash, 0, 0, "TRADE PLAN",     text_color=_acTeal,  text_size=size.small, bgcolor=color.new(#0A1E1E, 0), text_halign=text.align_center)
+    table.cell(tradeDash, 1, 0, "Stop Loss",       text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 2, 0, "Take Profit",     text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 3, 0, "R : R",           text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 4, 0, "Liq Target",      text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 5, 0, "Size",            text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 6, 0, "Execution",       text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 7, 0, "Confidence",      text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 8, 0, "Grade",           text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 9, 0, "Signal Quality",  text_color=_txtMuted, text_size=size.small, bgcolor=_bgStrip, text_halign=text.align_center)
+
+    // Row 1 — Values (size.normal)
+    table.cell(tradeDash, 0, 1, "—",
+         text_color=_txtDeep, text_size=size.small, bgcolor=color.new(#0A1E1E, 0), text_halign=text.align_center)
+    table.cell(tradeDash, 1, 1, _slStr,
+         text_color=_acBear,  text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 2, 1, _tpStr,
+         text_color=_acBull,  text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 3, 1, _rrStr,
+         text_color=_acTeal,  text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 4, 1, _liqStrip,
+         text_color=liqTargetValid ? _acInfo : _txtDim, text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 5, 1, _posStr,
+         text_color=_acPurple, text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 6, 1, execGrade_v19,
+         text_color=execColor_v19, text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 7, 1, str.tostring(alertConfidenceFinal) + "%",
+         text_color=_confClr, text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+    table.cell(tradeDash, 8, 1, compositeGrade,
+         text_color=_gradeFg, text_size=_sizeNormal, bgcolor=_gradeBg, text_halign=text.align_center)
+    table.cell(tradeDash, 9, 1, signalQualityText,
+         text_color=signalQualityColor, text_size=_sizeNormal, bgcolor=_bgStrip, text_halign=text.align_center)
+
+//=====================================================================
+// BOTTOM-LEFT: RISK MANAGEMENT PANEL (default OFF — toggle showRisk)
+// v25: Added propRiskState and trailing DD display
+//=====================================================================
+
+var table riskDash = table.new(
+     position.bottom_left, 2, 10,
+     bgcolor=color.new(#080D1A, 0),
+     frame_color=color.new(#334155, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool riskInitialized = false
+var int  _lastRiskUpdate = -999
+bool riskRefresh = barstate.islast and (not riskInitialized or bar_index - _lastRiskUpdate >= 3)
+
+if showRisk and showDashboard and riskRefresh and not mobileMode
+    _lastRiskUpdate := bar_index
+    riskInitialized := true
+
+    table.cell(riskDash, 0, 0, "RISK MANAGEMENT",
+         text_color=_acWarning, text_size=size.small, bgcolor=color.new(#1C1205, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 0, "", bgcolor=color.new(#1C1205, 0))
+
+    // v25: Risk State (4-state prop engine)
+    table.cell(riskDash, 0, 1, "Risk State",
+         text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 1, showPropMode ? propRiskState : "N/A",
+         text_color=showPropMode ? propRiskColor : _txtDim, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 2, "Recommended Risk",
+         text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(riskDash, 1, 2, str.tostring(recommendedRisk_v19, "#.##") + "%",
+         text_color=_riskClr, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 3, "News Risk",
+         text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 3, _newsFullText,
+         text_color=newsRiskColor, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 4, "Trade Tier",
+         text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(riskDash, 1, 4, _tierStr,
+         text_color=_tierClr, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 5, "Execution Grade",
+         text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 5, execGrade_v19,
+         text_color=execColor_v19, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 6, "Confluence",
+         text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(riskDash, 1, 6, str.tostring(alertConfidenceFinal) + "%",
+         text_color=_confClr, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 7, "Correlation",
+         text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 7, _corrFull,
+         text_color=_corrClr, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    // v25: Trailing DD row
+    table.cell(riskDash, 0, 8, "Trailing DD",
+         text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(riskDash, 1, 8, str.tostring(trailingDD, "#.##") + "%",
+         text_color=trailingDD > propMaxLimit * 0.7 ? _acBear : trailingDD > propMaxLimit * 0.4 ? _acWarning : _acBull,
+         text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(riskDash, 0, 9, "Trade Status",
+         text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(riskDash, 1, 9, _statusStrip,
+         text_color=_statFg, text_size=size.normal, bgcolor=_statBg, text_halign=text.align_right)
+
+//=====================================================================
+// OPTIONAL ANALYTICS PANEL — OFF by default
+//=====================================================================
+
+var table analyticsDash = table.new(
+     position.bottom_right, 2, 10,
+     bgcolor=color.new(#080D1A, 0),
+     frame_color=color.new(#334155, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool analyticsInitialized = false
+var int  _lastAnalyticsUpdate = -999
+bool analyticsRefresh = barstate.islast and (not analyticsInitialized or bar_index - _lastAnalyticsUpdate >= 5)
+
+if showAnalyticsPanel and showDashboard and analyticsRefresh and not mobileMode
+    _lastAnalyticsUpdate := bar_index
+    analyticsInitialized := true
+
+    _wrClr = winRate > 55 ? _acBull : winRate > 45 ? _acWarning : _acBear
+    _pfClr = profitFactor > 1.5 ? _acBull : profitFactor > 1.0 ? _acTeal : _acWarning
+    _evClr = evPerTrade > 0.5 ? _acBull : evPerTrade < -0.5 ? _acBear : _acWarning
+    _ddClr = dailyStatus == "BREACHED" or weeklyStatus == "BREACHED" ? _acBear : dailyStatus == "WARNING" or weeklyStatus == "WARNING" ? _acWarning : _acBull
+
+    table.cell(analyticsDash, 0, 0, "ANALYTICS (EST.)", text_color=_acPurple, text_size=size.small, bgcolor=color.new(#0D0A1E, 0), text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 0, "", bgcolor=color.new(#0D0A1E, 0))
+
+    table.cell(analyticsDash, 0, 1, "Win Rate",        text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 1, _wrStr + " (est.)", text_color=_wrClr,  text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(analyticsDash, 0, 2, "Profit Factor",   text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 2, _pfStr + " (est.)", text_color=_pfClr,  text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(analyticsDash, 0, 3, "Expectancy",      text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 3, evText,             text_color=_evClr,  text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    table.cell(analyticsDash, 0, 4, "Daily Drawdown",  text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 4, str.tostring(math.round(dailyDD), "#") + "%", text_color=_ddClr, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(analyticsDash, 0, 5, "Weekly Drawdown", text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 5, str.tostring(math.round(weeklyDD), "#") + "%", text_color=_ddClr, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    // v25: Trailing DD in analytics panel too
+    table.cell(analyticsDash, 0, 6, "Trailing DD",     text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 6, str.tostring(trailingDD, "#.##") + "%",
+         text_color=trailingDD > propMaxLimit * 0.7 ? _acBear : trailingDD > propMaxLimit * 0.4 ? _acWarning : _acBull,
+         text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    table.cell(analyticsDash, 0, 7, "Trades Tracked",  text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 7, str.tostring(_totalClosed), text_color=_txtMuted, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+    // PHASE 3 — Avg R-Multiple
+    table.cell(analyticsDash, 0, 8, "Avg R / Sharpe",  text_color=_txtDim, text_size=size.small, bgcolor=color.new(#0D1526, 0), text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 8, str.tostring(avgRR, "#.##") + " / " + str.tostring(sharpeProxy, "#.##"),
+         text_color=avgRR > 0 ? _acBull : _acBear, text_size=size.normal, bgcolor=color.new(#0D1526, 0), text_halign=text.align_right)
+
+    // PHASE 3 — Streak tracking
+    table.cell(analyticsDash, 0, 9, "Max Win/Loss Streak", text_color=_txtDim, text_size=size.small, bgcolor=_bgRisk, text_halign=text.align_left)
+    table.cell(analyticsDash, 1, 9, str.tostring(maxWinStreak) + " / " + str.tostring(maxLossStreak),
+         text_color=_txtMuted, text_size=size.normal, bgcolor=_bgRisk, text_halign=text.align_right)
+
+
+//=====================================================================
+// MOBILE DASHBOARD — Compact, top-right, 2 cols x 8 rows (v25)
+// Larger text (size.small/normal) for readability on small screens
+//=====================================================================
+
+var table mob = table.new(
+     position.top_right, 2, 8,
+     bgcolor=color.new(#0A0F1E, 0),
+     frame_color=color.new(#334155, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool mobInitialized = false
+var int  _lastMobUpdate = -999
+bool mobRefresh = barstate.islast and (not mobInitialized or bar_index - _lastMobUpdate >= 2)
+
+if showDashboard and mobRefresh and mobileMode
+    _lastMobUpdate := bar_index
+    mobInitialized := true
+
+    _mobBg = alertBullHigh ? _cellBull : alertBearHigh ? _cellBear : _cellNeutral
+    _mobFg = alertBullHigh ? _acBull : alertBearHigh ? _acBear : _txtMuted
+
+    table.cell(mob, 0, 0, "Signal",    text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 0, _setupMain, text_color=_mobFg,  text_size=size.normal, bgcolor=_mobBg, text_halign=text.align_right)
+
+    table.cell(mob, 0, 1, "Composite Score",    text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0F172A, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 1, str.tostring(compositeScore) + " / 100", text_color=compositeColor, text_size=size.normal, bgcolor=color.new(#0F172A, 0), text_halign=text.align_right)
+
+    table.cell(mob, 0, 2, "Grade",    text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 2, compositeGrade, text_color=_gradeFg, text_size=size.normal, bgcolor=_gradeBg, text_halign=text.align_right)
+
+    table.cell(mob, 0, 3, "Regime",   text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0F172A, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 3, _regimeStrip, text_color=regimeColor20, text_size=size.small, bgcolor=color.new(#0F172A, 0), text_halign=text.align_right)
+
+    table.cell(mob, 0, 4, "Bias Confidence", text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 4, biasConfLevel, text_color=biasConfColor, text_size=size.normal, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_right)
+
+    table.cell(mob, 0, 5, "Most Likely",  text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0F172A, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 5, _mloStrip,  text_color=_mloFg,  text_size=size.small, bgcolor=_mloBg, text_halign=text.align_right)
+
+    table.cell(mob, 0, 6, "Execution",     text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 6, execGrade_v19 + "  |  " + _statusStrip, text_color=_statFg, text_size=size.normal, bgcolor=color.new(#0A0F1E, 0), text_halign=text.align_right)
+
+    table.cell(mob, 0, 7, "Recommended Risk",   text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0F172A, 0), text_halign=text.align_left)
+    table.cell(mob, 1, 7, str.tostring(recommendedRisk_v19, "#.#") + "%", text_color=_riskClr, text_size=size.normal, bgcolor=color.new(#0F172A, 0), text_halign=text.align_right)
+
+//=====================================================================
+// CROSS-ASSET CONFIRMATION PANEL (Optional, top-right, default OFF)
+// Enable with showMacroExpanded = true
+//=====================================================================
+
+var table asset = table.new(
+     position.top_right, 7, 2,
+     bgcolor=color.new(#0A0F1E, 0),
+     frame_color=color.new(#334155, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool assetInitialized = false
+var int  _lastAssetUpdate = -999
+bool assetRefresh = barstate.islast and (not assetInitialized or bar_index - _lastAssetUpdate >= 5)
+
+if showMacroExpanded and showDashboard and assetRefresh and not mobileMode
+    _lastAssetUpdate := bar_index
+    assetInitialized := true
+
+    table.cell(asset, 0, 0, "Dollar",  text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 1, 0, "Yields",  text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 2, 0, "Bitcoin", text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 3, 0, "S&P 500", text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 4, 0, "Silver",  text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 5, 0, "Euro",    text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+    table.cell(asset, 6, 0, "Real Yield", text_color=_txtMuted, text_size=size.small, bgcolor=color.new(#0D1526,0), text_halign=text.align_center)
+
+    _dxyDir = dxyBull ? "▲" : dxyBear ? "▼" : "—"
+    _dxyVal = dxyBull ? "Bullish" : dxyBear ? "Bearish" : "Neutral"
+    _dxyClr2 = dxyBull ? _acBull : dxyBear ? _acBear : _txtDim
+
+    _yldDir = yieldRising ? "▲" : yieldFalling ? "▼" : "—"
+    _yldVal = yieldRising ? "Rising" : yieldFalling ? "Falling" : "Flat"
+    _yldClr2 = yieldRising ? _acBear : yieldFalling ? _acBull : _txtDim
+
+    _btcDir = btcBull ? "▲" : btcBear ? "▼" : "—"
+    _btcVal = btcBull ? "Bullish" : btcBear ? "Bearish" : "Neutral"
+    _btcClr2 = btcBull ? _acBull : btcBear ? _acBear : _txtDim
+
+    _spxDir = spxBull ? "▲" : spxBear ? "▼" : "—"
+    _spxVal = spxBull ? "Bullish" : spxBear ? "Bearish" : "Neutral"
+    _spxClr2 = spxBull ? _acBull : spxBear ? _acBear : _txtDim
+
+    _slvDir2 = silverClose > silverEMA ? "▲" : "▼"
+    _slvVal2 = silverClose > silverEMA ? "Bullish" : "Bearish"
+    _slvClr3 = silverClose > silverEMA ? _acBull : _acBear
+
+    _eurDir = eurusdBull ? "▲" : eurusdBear ? "▼" : "—"
+    _eurVal = eurusdBull ? "Bullish" : eurusdBear ? "Bearish" : "Neutral"
+    _eurClr2 = eurusdBull ? _acBull : eurusdBear ? _acBear : _txtDim
+
+    _ryDir = realYieldRising ? "▲" : realYieldFalling ? "▼" : "—"
+    _ryVal = realYieldRising ? "Rising" : realYieldFalling ? "Falling" : "Flat"
+    _ryClr2 = realYieldRising ? _acBear : realYieldFalling ? _acBull : _txtDim
+
+    table.cell(asset, 0, 1, _dxyDir + " " + _dxyVal, text_color=_dxyClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 1, 1, _yldDir + " " + _yldVal, text_color=_yldClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 2, 1, _btcDir + " " + _btcVal, text_color=_btcClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 3, 1, _spxDir + " " + _spxVal, text_color=_spxClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 4, 1, _slvDir2 + " " + _slvVal2, text_color=_slvClr3, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 5, 1, _eurDir + " " + _eurVal, text_color=_eurClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+    table.cell(asset, 6, 1, _ryDir + " " + _ryVal, text_color=_ryClr2, text_size=size.small, bgcolor=color.new(#0A0F1E,0), text_halign=text.align_center)
+
+//=====================================================================
+// CORRELATION MATRIX — Optional, middle-left, default OFF
+// Enable with showCorrMatrix = true in V19 ULTIMATE ENHANCEMENTS
+//=====================================================================
+
+var table corrDash = table.new(
+     position.middle_left, 5, 9,
+     bgcolor=color.new(#0A0F1E, 0),
+     frame_color=color.new(#334155, 0), frame_width=1,
+     border_color=color.new(#1E293B, 0), border_width=1)
+
+var bool corrInitialized = false
+var int  _lastCorrUpdate = -999
+bool corrRefresh = barstate.islast and (not corrInitialized or bar_index - _lastCorrUpdate >= 10)
+
+if showCorrMatrix and showDashboard and corrRefresh and not mobileMode
+    _lastCorrUpdate := bar_index
+    corrInitialized := true
+
+    _chBg = color.new(#0A0F1E, 0)
+    table.cell(corrDash, 0, 0, "Asset",       text_color=_acPurple, text_size=size.small, bgcolor=_chBg)
+    table.cell(corrDash, 1, 0, "30 Bar",      text_color=_txtMuted,   text_size=size.small, bgcolor=_chBg)
+    table.cell(corrDash, 2, 0, "60 Bar",      text_color=_txtMuted,   text_size=size.small, bgcolor=_chBg)
+    table.cell(corrDash, 3, 0, "120 Bar",     text_color=_txtMuted,   text_size=size.small, bgcolor=_chBg)
+    table.cell(corrDash, 4, 0, "Stability",   text_color=_txtMuted,   text_size=size.small, bgcolor=_chBg)
+
+    var array<string> _corrNames = array.from("DXY", "Yield", "Silver", "BTC", "Oil", "SPX", "EUR", "JPY")
+    c30  = array.from(corrGoldDXY_30, corrGoldYld_30, corrGoldSlv_30, corrGoldBTC_30, corrGoldOil_30, corrGoldSPX_30, corrGoldEUR_30, corrGoldJpy_30)
+    c60  = array.from(corrGoldDXY_60, corrGoldYld_60, corrGoldSlv_60, corrGoldBTC_60, corrGoldOil_60, corrGoldSPX_60, corrGoldEUR_60, corrGoldJpy_60)
+    c120 = array.from(corrGoldDXY_120, corrGoldYld_120, corrGoldSlv_120, corrGoldBTC_120, corrGoldOil_120, corrGoldSPX_120, corrGoldEUR_120, corrGoldJpy_120)
+    stabs = array.from(stabDXY, stabYld, stabSlv, stabBTC, stabOil, stabSPX, stabEUR, stabJpy)
+
+    for i = 0 to 7
+        _rowBg = i % 2 == 0 ? color.new(#0A0F1E, 0) : color.new(#0D1526, 0)
+        _c30v  = nz(array.get(c30,i))
+        _c60v  = nz(array.get(c60,i))
+        _c120v = nz(array.get(c120,i))
+        _stabv = nz(array.get(stabs,i))
+        table.cell(corrDash, 0, i+1, array.get(_corrNames, i), text_color=_txtPrimary, text_size=size.small, bgcolor=_rowBg, text_halign=text.align_left)
+        table.cell(corrDash, 1, i+1, str.tostring(_c30v, "#.##"),
+             text_color=_c30v > 0 ? _acBull : _acBear, text_size=size.small, bgcolor=_rowBg)
+        table.cell(corrDash, 2, i+1, str.tostring(_c60v, "#.##"),
+             text_color=_c60v > 0 ? _acBull : _acBear, text_size=size.small, bgcolor=_rowBg)
+        table.cell(corrDash, 3, i+1, str.tostring(_c120v, "#.##"),
+             text_color=_c120v > 0 ? _acBull : _acBear, text_size=size.small, bgcolor=_rowBg)
+        table.cell(corrDash, 4, i+1,
+             _stabv < 0.2 ? "Stable" : _stabv < 0.4 ? "Moderate" : "Unstable",
+             text_color=_stabv < 0.2 ? _acBull : _stabv < 0.4 ? _acWarning : _acBear,
+             text_size=size.small, bgcolor=_rowBg)
+
+//=====================================================================
+// ALERTS — use FIX 3 final filtered vars
+//=====================================================================
+
+alertcondition(alertBullS_fp and finalApprovedBull, title="v25: S-Grade Long",  message="GOLD v25 S-GRADE LONG. Final quality gates passed.")
+alertcondition(alertBearS_fp and finalApprovedBear, title="v25: S-Grade Short", message="GOLD v25 S-GRADE SHORT. Final quality gates passed.")
+alertcondition(alertBullA_fp and finalApprovedBull, title="v25: A-Grade Long",  message="GOLD v25 A-GRADE LONG. Final quality gates passed.")
+alertcondition(alertBearA_fp and finalApprovedBear, title="v25: A-Grade Short", message="GOLD v25 A-GRADE SHORT. Final quality gates passed.")
+alertcondition(alertBullB_fp and finalApprovedBull, title="v25: B-Grade Long",  message="GOLD v25 B-GRADE LONG. Final quality gates passed.")
+alertcondition(alertBearB_fp and finalApprovedBear, title="v25: B-Grade Short", message="GOLD v25 B-GRADE SHORT. Final quality gates passed.")
+alertcondition(finalApprovedBull, title="v25: High Confidence Long",  message="GOLD v25 HIGH CONFIDENCE LONG. Check chart.")
+alertcondition(finalApprovedBear, title="v25: High Confidence Short", message="GOLD v25 HIGH CONFIDENCE SHORT. Check chart.")
+
+if finalApprovedBull
+    _tier = alertBullS_fp ? "S" : alertBullA_fp ? "A" : "B"
+    alert("GOLD v25.1 " + _tier + "-GRADE LONG | Composite: " + compositeGrade + " " + str.tostring(compositeScore) + "/100 | Bias BULL " + str.tostring(math.round(probBull)) + "% BEAR " + str.tostring(math.round(probBear)) + "% RNG " + str.tostring(math.round(probRange)) + "% | Target: " + str.tostring(pathTarget, "#.##") + " | Invalidation: " + str.tostring(invalidationLevel, "#.##") + " | News: " + newsRiskText + " | Rec Risk: " + str.tostring(recommendedRisk_v19, "#.##") + "% | Exec: " + execGrade_v19 + " | Stop: " + str.tostring(longStopLoss, "#.##") + " | TP: " + str.tostring(longTakeProfit, "#.##"), alert.freq_once_per_bar_close)
+
+if finalApprovedBear
+    _tier = alertBearS_fp ? "S" : alertBearA_fp ? "A" : "B"
+    alert("GOLD v25.1 " + _tier + "-GRADE SHORT | Composite: " + compositeGrade + " " + str.tostring(compositeScore) + "/100 | Bias BULL " + str.tostring(math.round(probBull)) + "% BEAR " + str.tostring(math.round(probBear)) + "% RNG " + str.tostring(math.round(probRange)) + "% | Target: " + str.tostring(pathTarget, "#.##") + " | Invalidation: " + str.tostring(invalidationLevel, "#.##") + " | News: " + newsRiskText + " | Rec Risk: " + str.tostring(recommendedRisk_v19, "#.##") + "% | Exec: " + execGrade_v19 + " | Stop: " + str.tostring(shortStopLoss, "#.##") + " | TP: " + str.tostring(shortTakeProfit, "#.##"), alert.freq_once_per_bar_close)
+
+// END OF v25 — AUDIT FIXES APPLIED

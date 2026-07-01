@@ -1,0 +1,30 @@
+RequirementID,Origin,Description,ValidationStatus,BackendModule,TestStatus,Notes
+R-001,RI-1,TP1 RR calculation (tpRR1 = TP1 RR 1:1),PENDING,Risk Engine,PENDING,Audit I-001: corrected naming from tpRR2
+R-002,RI-1,TP2 RR calculation (tpRR2 = TP2 RR 1:2),PENDING,Risk Engine,PENDING,Audit I-001: corrected naming from tpRR1
+R-003,RI-1,Division-by-zero guard on asianLookbackSec,PENDING,Data Engine,PENDING,Audit I-002: tick/Renko chart safety
+R-004,RI-1,Division-by-zero guard on PDH=PDL doji day,PENDING,Data Engine,PENDING,Audit I-003A: current day
+R-005,RI-1,Division-by-zero guard on PDH=PDL historical analog,PENDING,Analytics Engine,PENDING,Audit I-003B: analog day
+R-006,RI-1,adaptiveATR > 0 guard on emaSpread division,PENDING,Analytics Engine,PENDING,Audit I-004
+R-007,RI-1,safeDiv() with na numerator guard,PENDING,Core Library,PENDING,Audit I-004 update
+R-008,RI-1,Correlation significance Bonferroni-corrected (z=2.58 for 5 assets),PENDING,Analytics Engine,PENDING,Audit I-005: header corrected
+R-009,RI-1,Dashboard bias computation (bullScore/bearScore/rangeScore),PENDING,Forecast Engine,PENDING,Core dashboard field
+R-010,RI-1,Dashboard probability score (confidenceScore),PENDING,Forecast Engine,PENDING,Core dashboard field
+R-011,RI-1,Trend score computation (ADX/EMA-based),PENDING,Analytics Engine,PENDING,Trend engine core
+R-012,RI-1,Liquidity score computation (volume-based),PENDING,Analytics Engine,PENDING,Liquidity engine core
+R-013,RI-1,Session quality scoring (asian/london/ny),PENDING,Analytics Engine,PENDING,Session bias module
+R-014,RI-1,Historical analog engine (7-dim continuous scoring),PENDING,Forecast Engine,PENDING,Audit I-003: converted from discrete
+R-015,RI-1,Smart Money Concepts structure detection,Analytics Engine,PENDING,SMC module
+R-016,RI-1,Candle pattern scoring (internal/external),Analytics Engine,PENDING,Pattern recognition
+R-017,RI-1,Support/resistance scan (150->100 bars with early break),Analytics Engine,PENDING,S/R module
+R-018,RI-1,Normalization (single-pass 70/20/10 blend),Core Library,PENDING,Score normalization
+R-019,RI-1,FVG tracking (incremental, no loop),Analytics Engine,PENDING,Order block / FVG module
+R-020,RI-1,Dashboard label system (all heads-up display labels),Forecast Engine,PENDING,Visual layer
+R-021,NEW,Position sizing (riskPercent/accountSize/pointValue actually used),PENDING,Risk Engine,PENDING,Decoupled for V4.0
+R-022,NEW,Realistic execution model (spread/slippage/commission/partial fills),PENDING,Execution Engine,PENDING,Pine limitation
+R-023,NEW,Portfolio risk management (heat/drawdown/daily loss limits),PENDING,Risk Engine,PENDING,New for V4.0
+R-024,NEW,Multi-asset correlation engine (beyond 5 assets),PENDING,Analytics Engine,PENDING,Pine limitation
+R-025,NEW,Tick-level execution modeling,PENDING,Execution Engine,PENDING,Pine limitation
+R-026,NEW,True portfolio analytics engine,PENDING,Analytics Engine,PENDING,Pine limitation
+R-027,REDESIGN,Statistical forecasting (R²=0.27 baseline improved),PENDING,Forecast Engine,PENDING,Requires separate research phase
+R-028,REDESIGN,30% outcome threshold (arbitrary),PENDING,Risk Engine,PENDING,Requires statistical justification
+R-029,REDESIGN,Zero-cost assumption removed,PENDING,Execution Engine,PENDING,Add realistic costs

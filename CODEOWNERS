@@ -1,0 +1,44 @@
+# Repository default owner for most changes
+* @project-owner
+
+# Architecture and design decisions
+/docs/02_System_Architecture/ @system-architect
+/docs/04_Technical_Architecture/ @system-architect
+/docs/05_API_Contracts/ @system-architect
+
+# Trading logic and formulas
+/src/pine/ @quant-developer
+/docs/07_Formula_Dictionary/ @quant-developer
+/backend/strategy_engine/ @quant-developer
+
+# Backend services
+/backend/ @python-engineer
+/requirements*.txt @python-engineer
+/pyproject.toml @python-engineer
+
+# Data engineering
+/database/ @data-engineer
+/feature_store/ @data-engineer
+
+# Testing and validation
+/tests/ @qa-engineer
+/docs/08_Validation_Framework/ @qa-engineer
+
+# Security
+/docs/11_Audit_Framework/ @security-engineer
+/SECURITY.md @security-engineer
+
+# CI/CD and deployment
+/.github/ @devops-engineer
+/docker/ @devops-engineer
+/workers/ @devops-engineer
+/docs/10_Deployment_Guide/ @devops-engineer
+
+# Cloud infrastructure
+/workers/ @devops-engineer
+/database/migrations/ @data-engineer @devops-engineer
+
+# Documentation
+/docs/ @technical-writer
+/CHANGELOG.md @technical-writer
+/CONTRIBUTING.md @technical-writer

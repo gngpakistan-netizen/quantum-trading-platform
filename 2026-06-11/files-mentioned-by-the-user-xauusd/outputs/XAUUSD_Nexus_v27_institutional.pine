@@ -1,0 +1,3170 @@
+//@version=6
+indicator(
+     "XAUUSD Quantum 2.0",
+     overlay=true,
+     max_lines_count=100,
+     max_labels_count=100,
+     max_boxes_count=100,
+     max_bars_back=5000)
+
+//=====================================================================
+// XAUUSD QUANTUM 2.0 — CHANGELOG
+//=====================================================================
+// v2.0 — Quantum Upgrade
+//   Renamed from "Institutional Liquidity Nexus v27" to "Quantum 2.0"
+//   HIST_MAX expanded: 1000 → 4500 (adaptive fallback 4500/3500/2500)
+//   OUTCOME_N kept at 10 (forward outcome window)
+//   Kelly Criterion added: K% = W - ((1-W)/R)
+//   Correlation Engine: directional magnitude per asset (Strong/Mod/Wk)
+//   Dashboard: reorganized into 11-section institutional layout
+//   Chart clutter reduced: BOS/MSS gated by quality threshold
+//   Calibration detail: predicted vs actual per bucket
+//   Feature attribution: all 6 factors displayed
+//   Historical probability engine: 4500-bar source for oBull/oBear/oRange
+//   Liquidity reach: per-target rates from historical outcomes
+//   Structure persistence: failure probability added
+//   Guarded 500-iter loop with barstate.isconfirmed
+//   All request.security() use lookahead=barmerge.lookahead_off
+//   Added array.size() guards before get/set calls
+//=====================================================================
+
+//=====================================================================
+// INSTITUTIONAL COLOR PALETTE — 5-color standard
+// Bull: #00D084  | Bear: #FF4D4D  | Neutral: #A0A0A0
+// Liq:  #00C2FF  | Warn:  #FF8C00
+//=====================================================================
+
+color cBull        = color.new(#00D084, 0)
+color cBullSoft    = color.new(#00D084, 70)
+color cBear        = color.new(#FF4D4D, 0)
+color cBearSoft    = color.new(#FF4D4D, 70)
+color cNeutral     = color.new(#A0A0A0, 0)
+color cWarning     = color.new(#FF8C00, 0)
+color cForecast    = color.new(#00C2FF, 0)
+color cRange       = color.new(#A0A0A0, 0)
+color cLabel       = color.new(#A0A0A0, 0)
+color cAdxC        = color.new(#A0A0A0, 0)
+color cEma20       = color.new(#00C2FF, 0)
+color cEma50       = color.new(#A0A0A0, 0)
+color cEma200      = color.new(#00C2FF, 0)
+ema20Color         = cEma20
+ema50Color         = cEma50
+ema200Color        = cEma200
+
+//=====================================================================
+// MODULE TOGGLES (reduced)
+//=====================================================================
+
+grpModules = "MODULES"
+
+showDashboard    = input.bool(true,  "Dashboard",                          group=grpModules)
+showTradePlan    = input.bool(true,  "Trade Plan",                         group=grpModules)
+showVWAP         = input.bool(true,  "VWAP",                               group=grpModules)
+showSR           = input.bool(true,  "Support / Resistance",               group=grpModules)
+showSessions     = input.bool(true,  "Sessions",                           group=grpModules)
+showSignals      = input.bool(true,  "Signals",                            group=grpModules)
+showFVG          = input.bool(true,  "Fair Value Gaps",                    group=grpModules)
+showOB           = input.bool(true,  "Order Blocks",                       group=grpModules)
+showSMT          = input.bool(true,  "SMT Divergence",                     group=grpModules)
+showAsianSweeps  = input.bool(true,  "Asian Sweeps",                       group=grpModules)
+showClimax       = input.bool(true,  "Volume Climax",                      group=grpModules)
+showAdaptiveATR  = input.bool(true,  "Adaptive ATR Regime",                group=grpModules)
+showDisplacement = input.bool(true,  "Displacement Candles",               group=grpModules)
+showManipulation = input.bool(true,  "Manipulation Signals",              group=grpModules)
+manipThreshold   = input.float(0.5,  "Manip Threshold (ATR)", minval=0.1, maxval=2.0, step=0.1, group="V11 INTELLIGENCE")
+showForecastCone = input.bool(false, "Forecast Cone",                      group=grpModules)
+forecastLookback = input.int(20,     "Forecast Lookback", minval=10, maxval=50, group="V17 PREDICTIVE ENHANCEMENTS")
+forecastBars     = input.int(10,     "Forecast Projection", minval=5, maxval=30, group="V17 PREDICTIVE ENHANCEMENTS")
+forecastZ        = input.float(2.0,  "Forecast Confidence (Z-score)", minval=1.0, maxval=3.0, step=0.1, group="V17 PREDICTIVE ENHANCEMENTS")
+showPremiumDisc  = input.bool(true,  "Premium/Discount Zones",             group=grpModules)
+showStatsEngine  = input.bool(true,  "Statistical Engines",                group=grpModules)
+showAdvancedMode = input.bool(false, "Advanced Dashboard Mode",            group=grpModules)
+showCorrHealth   = input.bool(true,  "Correlation Health Check",           group=grpModules)
+
+perfMode         = input.bool(false, "Institutional Performance Mode",     group=grpModules)
+showMSS          = input.bool(true,  "Market Structure Shift (MSS)",       group=grpModules)
+
+grpClean = "CHART CLEANUP"
+showLiqPools    = input.bool(true,  "Show Liquidity Pools (PDH/PDL/etc)", group=grpClean)
+showMacroPanel  = input.bool(true,  "Show Macro Panel",                   group=grpClean)
+cleanInstitutional = input.bool(false, "Clean Institutional Appearance",   group=grpClean)
+professionalMode   = input.bool(false, "Professional Execution Mode",        group=grpClean)
+
+//=====================================================================
+// CORE INPUTS (reduced - no trade/prop/news/fib/forecast inputs)
+//=====================================================================
+
+grpCore = "CORE"
+
+ema20Len      = input.int(20,  "EMA20",                  group=grpCore)
+ema50Len      = input.int(50,  "EMA50",                  group=grpCore)
+ema200Len     = input.int(200, "EMA200",                 group=grpCore)
+atrLen        = input.int(14,  "ATR Base",               group=grpCore)
+adxLen        = input.int(14,  "ADX",                    group=grpCore)
+adxThreshold  = input.int(25,  "ADX Threshold",          group=grpCore)
+rsiLen        = input.int(14,  "RSI Length",    minval=2, maxval=50, group=grpCore)
+pivotLen      = input.int(3,   "Pivot Length",  minval=2, maxval=10, group=grpCore)
+recentBarsLen = input.int(120, "Signal Lookback Bars", minval=50, maxval=500, group=grpCore)
+trendThreshold= input.int(60,  "Trend Score Threshold", minval=50, maxval=90, step=5, group=grpCore)
+volClimaxPerc = input.int(95,  "Volume Climax Percentile", minval=90, maxval=99, step=1, group=grpCore)
+eqAtrMult     = input.float(0.25,"EQ Tolerance (ATR mult)", minval=0.05, maxval=1.0, step=0.05, group=grpCore)
+volLookback   = input.int(50,  "Volume Climax Lookback", minval=20, maxval=100, group=grpCore)
+
+showEMAs  = input.bool(true,  "Show EMAs",  group=grpModules)
+showADX   = input.bool(true,  "Show ADX",   group=grpModules)
+showMacro = input.bool(true,  "Show Macro Score", group=grpModules)
+showPDH   = input.bool(true,  "Show PDH Line",   group=grpModules)
+showPDL   = input.bool(true,  "Show PDL Line",   group=grpModules)
+showPWH   = input.bool(true,  "Show PWH Line",   group=grpModules)
+showPWL   = input.bool(true,  "Show PWL Line",   group=grpModules)
+
+pdlLen      = input.int(20,  "PDL Lookback",   minval=10, maxval=50, group=grpCore)
+pwlLen      = input.int(50,  "PWL Lookback",   minval=20, maxval=100, group=grpCore)
+fvgMaxBars  = input.int(30,  "FVG Max Bars",   minval=10, maxval=100, group=grpCore)
+obMaxBars   = input.int(20,  "OB Max Bars",    minval=10, maxval=50, group=grpCore)
+obAtrMult   = input.float(1.5, "OB ATR Multiplier",  minval=0.5, maxval=3.0, step=0.1, group=grpCore)
+liqProxMult = input.float(1.5, "Liq Proximity (ATR)", minval=0.5, maxval=4.0, step=0.1, group=grpCore)
+
+grpV11 = "V11 INTELLIGENCE"
+
+dispMult  = input.float(2.5, "Displacement Multiplier",  minval=1.5, maxval=5.0, step=0.1, group=grpV11)
+macroTF   = input.timeframe("60", "Macro Correlation Timeframe", group=grpV11)
+
+grpV17 = "V17 PREDICTIVE ENHANCEMENTS"
+
+dxyRocLen          = input.int(10,   "DXY Momentum ROC Length (bars)",   minval=5, maxval=30,           group=grpV17)
+useRsiDivFilter    = input.bool(true,"RSI Divergence Filter",                                            group=grpV17)
+rsiDivLookback     = input.int(14,   "RSI Divergence Lookback",          minval=5, maxval=30,           group=grpV17)
+corrHealthBars     = input.int(10,   "Correlation Break Lookback (bars)",minval=5, maxval=20,           group=grpV17)
+znRocLen           = input.int(10,   "ZN1 Rate Pressure ROC Length",     minval=5, maxval=20,           group=grpV17)
+
+grpV19c = "V19 CORRELATION"
+corrShortLen  = input.int(30,  "Corr Short Window",  minval=10, maxval=50,  group=grpV19c)
+corrMedLen    = input.int(60,  "Corr Medium Window", minval=30, maxval=100, group=grpV19c)
+corrLongLen   = input.int(120, "Corr Long Window",   minval=60, maxval=200, group=grpV19c)
+
+//=====================================================================
+//=====================================================================
+// CORE ENGINE
+//=====================================================================
+
+ema20  = ta.ema(close, ema20Len)
+ema50  = ta.ema(close, ema50Len)
+ema200 = ta.ema(close, ema200Len)
+
+atr    = ta.atr(atrLen)
+
+[diplus, diminus, adxVal] = ta.dmi(adxLen, adxLen)
+
+vwapVal = ta.vwap(hlc3)
+
+rsiVal = ta.rsi(close, rsiLen)
+
+volSma20  = ta.sma(volume, 20)
+highVolume = volume > volSma20
+
+recentBars = bar_index > last_bar_index - recentBarsLen
+
+// (slope calculations removed — unused)
+
+goldRet = close / nz(close[1], close) - 1
+
+//=====================================================================
+// HTF TREND STACK - 5M / 15M / 1H / 4H / 1D (zero repaint via [1])
+//=====================================================================
+
+[htf5mClose,  htf5mEma20,  htf5mEma50,  htf5mEma200] =
+     request.security(syminfo.tickerid, "5",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf15mClose, htf15mEma20, htf15mEma50, htf15mEma200] =
+     request.security(syminfo.tickerid, "15",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf1hClose,  htf1hEma20,  htf1hEma50,  htf1hEma200] =
+     request.security(syminfo.tickerid, "60",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htf4hClose,  htf4hEma20,  htf4hEma50,  htf4hEma200] =
+     request.security(syminfo.tickerid, "240",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+[htfDClose,   htfDEma20,   htfDEma50,   htfDEma200] =
+     request.security(syminfo.tickerid, "D",
+          [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off)
+
+chartTFSeconds = timeframe.in_seconds()
+htf5mAvailable  = chartTFSeconds <= 300
+htf15mAvailable = chartTFSeconds <= 900
+htf1hAvailable  = chartTFSeconds <= 3600
+htf4hAvailable  = chartTFSeconds <= 14400
+htfDAvailable   = chartTFSeconds <= 86400
+
+htfTrendScore(htfClose, htfEma20, htfEma50, htfEma200) =>
+    score = 0
+    score += (not na(htfClose) and not na(htfEma200) and htfClose > htfEma200) ? 40 : 0
+    score += (not na(htfEma20) and not na(htfEma50)  and htfEma20 > htfEma50)  ? 40 : 0
+    score += (not na(htfClose) and not na(htfEma20)  and htfClose > htfEma20)  ? 20 : 0
+    score
+
+htf5mScore  = htf5mAvailable  ? htfTrendScore(htf5mClose,  htf5mEma20,  htf5mEma50,  htf5mEma200) : 50
+htf15mScore = htf15mAvailable ? htfTrendScore(htf15mClose, htf15mEma20, htf15mEma50, htf15mEma200) : 50
+htf1hScore  = htf1hAvailable  ? htfTrendScore(htf1hClose,  htf1hEma20,  htf1hEma50,  htf1hEma200) : 50
+htf4hScore  = htf4hAvailable  ? htfTrendScore(htf4hClose,  htf4hEma20,  htf4hEma50,  htf4hEma200) : 50
+htfDScore   = htfDAvailable   ? htfTrendScore(htfDClose,   htfDEma20,   htfDEma50,   htfDEma200) : 50
+
+htf5mBull  = htf5mScore  >= 60
+htf5mBear  = htf5mScore  <= 40
+htf15mBull = htf15mScore >= 60
+htf15mBear = htf15mScore <= 40
+htf1hBull  = htf1hScore  >= 60
+htf1hBear  = htf1hScore  <= 40
+htf4hBull  = htf4hScore  >= 60
+htf4hBear  = htf4hScore  <= 40
+htfDBull   = htfDScore   >= 60
+htfDBear   = htfDScore   <= 40
+
+htfAlignmentLong  = (htf1hBull ? 1 : 0) + (htf4hBull ? 1 : 0) + (htfDBull ? 1 : 0)
+htfAlignmentShort = (htf1hBear ? 1 : 0) + (htf4hBear ? 1 : 0) + (htfDBear ? 1 : 0)
+
+htfBullGate = htfAlignmentLong  >= 2
+htfBearGate = htfAlignmentShort >= 2
+
+htfFullLong  = (htf5mBull  ? 1 : 0) + (htf15mBull ? 1 : 0) + (htf1hBull ? 1 : 0) + (htf4hBull ? 1 : 0) + (htfDBull ? 1 : 0)
+htfFullShort = (htf5mBear  ? 1 : 0) + (htf15mBear ? 1 : 0) + (htf1hBear ? 1 : 0) + (htf4hBear ? 1 : 0) + (htfDBear ? 1 : 0)
+
+//=====================================================================
+// ADAPTIVE ATR REGIME ENGINE
+//=====================================================================
+
+atrTrending = ta.atr(7)
+atrRanging  = ta.atr(21)
+
+_rawAdaptiveATR = showAdaptiveATR ? (adxVal > adxThreshold ? atrTrending : atrRanging) : atr
+adaptiveATR     = math.max(nz(_rawAdaptiveATR, ta.tr), 0.10)
+
+atrPercentile = ta.percentrank(adaptiveATR, 50)
+
+//=====================================================================
+// MEAN REVERSION ANALYSIS (Part 7)
+// Distance from fair value measured in standard deviations
+//=====================================================================
+
+// Z-score of returns (20-period)
+float retMean20 = ta.sma(goldRet, 20)
+float retStd20  = ta.stdev(goldRet, 20)
+float retZScore = retStd20 > 0.0 ? (goldRet - retMean20) / retStd20 : 0.0
+
+// Distance from VWAP, EMAs in ATR terms (mean reversion gauges)
+float distVwapATR  = adaptiveATR > 0 ? (close - vwapVal) / adaptiveATR : 0.0
+float distEma20ATR = adaptiveATR > 0 ? (close - ema20) / adaptiveATR : 0.0
+float distEma50ATR = adaptiveATR > 0 ? (close - ema50) / adaptiveATR : 0.0
+float distEma200ATR = adaptiveATR > 0 ? (close - ema200) / adaptiveATR : 0.0
+
+// Composite mean reversion score (-100 to +100)
+float mrVwapScore   = distVwapATR * 30.0
+float mrEma20Score  = distEma20ATR * 25.0
+float mrEma50Score  = distEma50ATR * 25.0
+float mrEma200Score = distEma200ATR * 20.0
+float mrZScore      = retZScore * 15.0
+float mrComposite   = math.min(math.max(mrVwapScore + mrEma20Score + mrEma50Score + mrEma200Score + mrZScore, -100), 100)
+
+// MR regime classification
+string mrRegime = math.abs(mrComposite) >= 60 ? "Overextended" : math.abs(mrComposite) >= 30 ? "Extended" : "Normal"
+
+// MR score components for probability engine
+float mrBullScore = mrComposite <= -30 ? math.min(math.abs(mrComposite), 100) : 10.0
+float mrBearScore = mrComposite >= 30 ? math.min(math.abs(mrComposite), 100) : 10.0
+
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, 20, 2)
+regimeTrending = adxVal > adxThreshold
+regimeRanging  = adxVal <= adxThreshold and adxVal > 15
+regimeDead     = adxVal <= 15
+
+//=====================================================================
+// SESSION ENGINE — Precise DST Calculations
+//
+// US DST:  begins 2nd Sunday of March    02:00 local → clocks spring forward
+//          ends   1st Sunday of November 02:00 local → clocks fall back
+// EU DST:  begins last Sunday of March   01:00 UTC   → clocks spring forward
+//          ends   last Sunday of October 01:00 UTC   → clocks fall back
+//
+// Both regions observe DST simultaneously for most of the year, but there
+// are two 2-week windows of divergence:
+//   a) Late March: EU exits DST 2 weeks before US starts — UK UTC+1, US UTC-5
+//   b) Early November: US exits DST ~1 week before EU ends — UK UTC+0, US UTC-5
+//
+// Strategy: compute DST boundary day-of-month for the current bar's year/month,
+// then compare bar's day-of-month to determine if DST is active.
+//
+// Pine v6 note: we calculate the day-of-month of the Nth Sunday of a given
+// month using: first weekday of month = (dayofweek - (dayofmonth-1)%7 + 6) % 7 + 1
+// We find the Sunday on or after a given target day using modular arithmetic.
+//=====================================================================
+
+hourUTC   = hour(time,  "UTC")
+_dom      = dayofmonth(time, "UTC")
+_mon      = month(time, "UTC")
+_yr       = year(time, "UTC")
+_dow      = dayofweek(time, "UTC")   // 1=Sun, 2=Mon … 7=Sat
+
+// --- Helper: day-of-month of the Nth Sunday of (_mon, _yr) ---
+// firstSunDom = day of month of first Sunday in current month
+// dayofweek() gives 1 for Sunday.  The current bar's first-Sunday offset:
+//   daysBackToSun = (_dow - 1 + 7) % 7   → days back to most-recent Sunday
+//   firstSunDom   = _dom - daysBackToSun + (need to land ≥ 1, so add 7 if needed)
+int _daysBackToSun  = (_dow - 1 + 7) % 7
+int _thisSunDom     = _dom - _daysBackToSun          // Sunday of this week (may be <=0 for early month)
+int _firstSunDom    = _thisSunDom - 7 * ((_thisSunDom - 1) / 7)   // normalise to first Sunday ≥ 1
+// clamp: if _thisSunDom < 1 the first Sunday is next week
+if _firstSunDom < 1
+    _firstSunDom := _firstSunDom + 7
+
+// --- US DST ---
+// Start: 2nd Sunday of March  (dom = firstSunDom_Mar + 7)
+// End:   1st Sunday of November
+// We need the first Sunday of March and November for _yr.
+// We can't call month-specific functions per year in Pine easily, but we can
+// use the bar-level _firstSunDom when _mon matches the DST boundary month,
+// then record it with a var that resets each year.
+
+var int usDstStartDom = 8    // 2nd Sunday of March: safe default (8–14)
+var int usDstEndDom   = 1    // 1st Sunday of November: safe default (1–7)
+var int _lastUsDstYr  = 0
+
+if _yr != _lastUsDstYr
+    usDstStartDom := 8      // reset to default at new year
+    usDstEndDom   := 1
+    _lastUsDstYr  := _yr
+
+// In March: capture the first Sunday → 2nd Sunday = firstSunDom + 7
+if _mon == 3
+    usDstStartDom := _firstSunDom + 7
+
+// In November: capture the first Sunday
+if _mon == 11
+    usDstEndDom := _firstSunDom
+
+// US DST is active when:
+//   month > 3 and month < 11     → definitely DST
+//   month == 3 and dom >= usDstStartDom  → after clocks spring forward
+//   month == 11 and dom < usDstEndDom    → before clocks fall back
+bool usIsDST = (_mon > 3 and _mon < 11) or
+     (_mon == 3  and _dom >= usDstStartDom) or
+     (_mon == 11 and _dom <  usDstEndDom)
+
+// --- EU/London DST ---
+// Start: last Sunday of March
+// End:   last Sunday of October
+// Last Sunday of month M = (days in M) - ((dayofweek of last day - 1 + 7) % 7)
+// We approximate by capturing the last Sunday seen in March / October each year.
+
+var int euDstStartDom = 25   // last Sunday of March is always 25–31
+var int euDstEndDom   = 25   // last Sunday of October is always 25–31
+var int _lastEuDstYr  = 0
+
+if _yr != _lastEuDstYr
+    euDstStartDom := 25
+    euDstEndDom   := 25
+    _lastEuDstYr  := _yr
+
+// Track last Sunday seen in March / October each bar
+if _mon == 3  and _dow == 1
+    euDstStartDom := math.max(euDstStartDom, _dom)
+if _mon == 10 and _dow == 1
+    euDstEndDom   := math.max(euDstEndDom,   _dom)
+
+bool euIsDST = (_mon > 3 and _mon < 10) or
+     (_mon == 3  and _dom >= euDstStartDom) or
+     (_mon == 10 and _dom <  euDstEndDom)
+
+// --- Session hours (UTC) ---
+// London  = UTC+1 summer (EU DST) / UTC+0 winter
+// New York = UTC-4 summer (US DST) / UTC-5 winter
+// open times in UTC:
+//   London open:  08:00 UTC summer / 08:00 UTC winter  (always 08:00 UTC)
+//   London close: 17:00 UTC summer / 16:30 UTC winter  → we use 16 / 17
+//   NY open:      13:30 UTC summer / 14:30 UTC winter  → we use 13 / 14
+//   NY close:     21:00 UTC summer / 22:00 UTC winter  → we use 21 / 22
+int londonOpenUTC  = 7                              // 07:00 UTC always (pre-open activity starts)
+int londonCloseUTC = euIsDST ? 16 : 17             // 16:00 summer / 17:00 winter
+int nyOpenUTC      = usIsDST ? 13 : 14             // 13:00 summer / 14:00 winter
+int nyCloseUTC     = usIsDST ? 21 : 22             // 21:00 summer / 22:00 winter
+
+inAsian         = hourUTC >= 0              and hourUTC <  londonOpenUTC
+inLondon        = hourUTC >= londonOpenUTC  and hourUTC <  londonCloseUTC
+inNY            = hourUTC >= nyOpenUTC      and hourUTC <  nyCloseUTC
+inLondonKZ      = hourUTC >= (londonOpenUTC + 1) and hourUTC < (londonOpenUTC + 4)
+inLondonFixKZ   = hourUTC >= (londonOpenUTC + 3) and hourUTC < (londonOpenUTC + 4)
+inNYKZ          = hourUTC >= nyOpenUTC      and hourUTC < (nyOpenUTC + 3)
+inLondonCloseKZ = hourUTC >= (londonCloseUTC - 1) and hourUTC < (londonCloseUTC + 1)
+inKillzone      = inLondonKZ or inNYKZ or inLondonCloseKZ or inLondonFixKZ
+
+sessionQuality = 0
+sessionQuality += inKillzone ? 40 : inLondon or inNY ? 25 : inAsian ? 10 : 0
+sessionQuality += inLondonFixKZ ? 20 : 0
+sessionQuality += inNYKZ ? 15 : 0
+sessionQuality += (not inAsian or inLondonKZ) ? 10 : 0
+sessionQuality += (inLondon and not inLondonKZ) ? 5 : 0
+
+sessionLabel = inKillzone ? (inLondonFixKZ ? "LON-FIX" : inLondonKZ ? "LON-KZ" : inNYKZ ? "NY-KZ" : inLondonCloseKZ ? "LON-CL" : "KZ") : inLondon ? "LONDON" : inNY ? "NY" : inAsian ? "ASIAN" : "OFF"
+// (sessionExpectedRange removed — unused)
+
+bgcolor(showSessions and not perfMode and not cleanInstitutional and not professionalMode ? (inLondon ? color.new(#FF8C00, 97) : inNY ? color.new(#00C2FF, 97) : inAsian ? color.new(#A0A0A0, 98) : na) : na, title="Session Shading")
+
+//=====================================================================
+// MACRO ENGINE - 5 core assets only (DXY, US10Y, Silver, EURUSD, SPX)
+//=====================================================================
+
+[_rawDXY, _rawDXYFast, _rawDXYSlow, _rawDXYRoc] =
+     request.security("TVC:DXY", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, dxyRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawYield, _rawYieldFast, _rawYieldSlow, _rawYieldRoc] =
+     request.security("CBOT:ZN1!", macroTF,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, znRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawSilver, _rawSilverEMA] =
+     request.security("OANDA:XAGUSD", timeframe.period,
+          [close[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawEURUSD, _rawEURFast, _rawEURSlow, _rawEURRoc] =
+     request.security("OANDA:EURUSD", timeframe.period,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1], ta.roc(close, dxyRocLen)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+[_rawSPX, _rawSPXFast, _rawSPXSlow] =
+     request.security("SP:SPX", timeframe.period,
+          [close[1], ta.ema(close, 10)[1], ta.ema(close, 20)[1]],
+          barmerge.gaps_off, barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+var float cachedDXY    = na
+var float cachedYield  = na
+var float cachedSilver = na
+var float cachedEURUSD = na
+var float cachedSPX    = na
+var int dxyStaleCount    = 0
+var int yieldStaleCount  = 0
+var int silverStaleCount = 0
+var int eurusdStaleCount = 0
+var int spxStaleCount    = 0
+
+if not na(_rawDXY)
+    cachedDXY     := _rawDXY
+    dxyStaleCount := 0
+else
+    dxyStaleCount := dxyStaleCount + 1
+if not na(_rawYield)
+    cachedYield    := _rawYield
+    yieldStaleCount := 0
+else
+    yieldStaleCount := yieldStaleCount + 1
+if not na(_rawSilver)
+    cachedSilver    := _rawSilver
+    silverStaleCount := 0
+else
+    silverStaleCount := silverStaleCount + 1
+if not na(_rawEURUSD)
+    cachedEURUSD    := _rawEURUSD
+    eurusdStaleCount := 0
+else
+    eurusdStaleCount := eurusdStaleCount + 1
+if not na(_rawSPX)
+    cachedSPX    := _rawSPX
+    spxStaleCount := 0
+else
+    spxStaleCount := spxStaleCount + 1
+
+dxyClose    = cachedDXY
+yieldClose  = cachedYield
+silverClose = cachedSilver
+eurusdClose = cachedEURUSD
+spxClose    = cachedSPX
+
+dxyValid    = not na(dxyClose) and not na(_rawDXYFast) and not na(_rawDXYSlow)
+yieldValid  = not na(yieldClose) and not na(_rawYieldFast) and not na(_rawYieldSlow)
+silverValid = not na(silverClose) and not na(_rawSilverEMA)
+eurusdValid = not na(eurusdClose) and not na(_rawEURFast) and not na(_rawEURSlow)
+spxValid    = not na(spxClose) and not na(_rawSPXFast) and not na(_rawSPXSlow)
+
+dxyEMAFast    = _rawDXYFast
+dxyEMASlow    = _rawDXYSlow
+yieldEMAFast  = _rawYieldFast
+yieldEMASlow  = _rawYieldSlow
+eurusdEMAFast = _rawEURFast
+eurusdEMASlow = _rawEURSlow
+spxEMAFast    = _rawSPXFast
+spxEMASlow    = _rawSPXSlow
+silverEMA     = _rawSilverEMA
+
+dxyBull = dxyValid and dxyClose > dxyEMAFast and dxyEMAFast > dxyEMASlow
+dxyBear = dxyValid and dxyClose < dxyEMAFast and dxyEMAFast < dxyEMASlow
+yieldRising  = yieldValid and yieldClose > yieldEMAFast and yieldEMAFast > yieldEMASlow
+yieldFalling = yieldValid and yieldClose < yieldEMAFast and yieldEMAFast < yieldEMASlow
+eurusdBull = eurusdValid and eurusdClose > eurusdEMAFast and eurusdEMAFast > eurusdEMASlow
+eurusdBear = eurusdValid and eurusdClose < eurusdEMAFast and eurusdEMAFast < eurusdEMASlow
+spxBull    = spxValid    and spxClose    > spxEMAFast    and spxEMAFast    > spxEMASlow
+spxBear    = spxValid    and spxClose    < spxEMAFast    and spxEMAFast    < spxEMASlow
+
+macroBullVotes = (dxyBear ? 1 : 0) + (yieldFalling ? 1 : 0) + (spxBull ? 1 : 0) + (eurusdBull ? 1 : 0)
+macroBearVotes = (dxyBull ? 1 : 0) + (yieldRising  ? 1 : 0) + (spxBear ? 1 : 0) + (eurusdBear ? 1 : 0)
+macroBull = macroBullVotes >= 3
+macroBear = macroBearVotes >= 3
+
+dxyROC      = dxyValid ? nz(_rawDXYRoc, 0.0) : 0.0
+dxyMomBull  = dxyROC >  0.15
+dxyMomBear  = dxyROC < -0.15
+znROC          = yieldValid ? nz(_rawYieldRoc, 0.0) : 0.0
+eurusdROC      = eurusdValid ? nz(_rawEURRoc, 0.0) : 0.0
+ratePressure   = znROC + eurusdROC
+ratePressureBull = ratePressure >  0.1
+ratePressureBear = ratePressure < -0.1
+
+goldBarDir    = close > close[1]  ? 1 : close < close[1]  ? -1 : 0
+dxyBarDir_raw = dxyValid ? (dxyClose > dxyClose[1] ? 1 : dxyClose < dxyClose[1] ? -1 : 0) : 0
+var int corrBreakCount = 0
+if goldBarDir == dxyBarDir_raw and goldBarDir != 0
+    corrBreakCount := corrBreakCount + 1
+else
+    corrBreakCount := 0
+corrBreakdown = showCorrHealth and corrBreakCount >= corrHealthBars
+
+silverRet = silverValid ? silverClose / nz(silverClose[1], silverClose) - 1 : 0.0
+dxyRet    = dxyValid    ? dxyClose    / nz(dxyClose[1], dxyClose) - 1 : 0.0
+yieldRet  = yieldValid  ? yieldClose  / nz(yieldClose[1], yieldClose) - 1 : 0.0
+eurRet    = eurusdValid ? eurusdClose / nz(eurusdClose[1], eurusdClose) - 1 : 0.0
+spxRet    = spxValid    ? spxClose    / nz(spxClose[1], spxClose) - 1 : 0.0
+
+//=====================================================================
+// CORRELATION - 5 assets x 3 windows
+//=====================================================================
+
+_ccGoldDXY_30  = ta.correlation(goldRet, dxyRet,    corrShortLen)
+_ccGoldDXY_60  = ta.correlation(goldRet, dxyRet,    corrMedLen)
+_ccGoldDXY_120 = ta.correlation(goldRet, dxyRet,    corrLongLen)
+_ccGoldYld_30  = ta.correlation(goldRet, yieldRet,  corrShortLen)
+_ccGoldYld_60  = ta.correlation(goldRet, yieldRet,  corrMedLen)
+_ccGoldYld_120 = ta.correlation(goldRet, yieldRet,  corrLongLen)
+_ccGoldSlv_30  = ta.correlation(goldRet, silverRet, corrShortLen)
+_ccGoldSlv_60  = ta.correlation(goldRet, silverRet, corrMedLen)
+_ccGoldSlv_120 = ta.correlation(goldRet, silverRet, corrLongLen)
+_ccGoldSPX_30  = ta.correlation(goldRet, spxRet,    corrShortLen)
+_ccGoldSPX_60  = ta.correlation(goldRet, spxRet,    corrMedLen)
+_ccGoldSPX_120 = ta.correlation(goldRet, spxRet,    corrLongLen)
+_ccGoldEUR_30  = ta.correlation(goldRet, eurRet,    corrShortLen)
+_ccGoldEUR_60  = ta.correlation(goldRet, eurRet,    corrMedLen)
+_ccGoldEUR_120 = ta.correlation(goldRet, eurRet,    corrLongLen)
+
+corrGoldDXY_30  = dxyValid    ? _ccGoldDXY_30  : na
+corrGoldDXY_60  = dxyValid    ? _ccGoldDXY_60  : na
+corrGoldDXY_120 = dxyValid    ? _ccGoldDXY_120 : na
+corrGoldYld_30  = yieldValid  ? _ccGoldYld_30  : na
+corrGoldYld_60  = yieldValid  ? _ccGoldYld_60  : na
+corrGoldYld_120 = yieldValid  ? _ccGoldYld_120 : na
+corrGoldSlv_30  = silverValid ? _ccGoldSlv_30  : na
+corrGoldSlv_60  = silverValid ? _ccGoldSlv_60  : na
+corrGoldSlv_120 = silverValid ? _ccGoldSlv_120 : na
+corrGoldSPX_30  = spxValid    ? _ccGoldSPX_30  : na
+corrGoldSPX_60  = spxValid    ? _ccGoldSPX_60  : na
+corrGoldSPX_120 = spxValid    ? _ccGoldSPX_120 : na
+corrGoldEUR_30  = eurusdValid ? _ccGoldEUR_30  : na
+corrGoldEUR_60  = eurusdValid ? _ccGoldEUR_60  : na
+corrGoldEUR_120 = eurusdValid ? _ccGoldEUR_120 : na
+
+avgCorrDXY = (nz(corrGoldDXY_30) + nz(corrGoldDXY_60) + nz(corrGoldDXY_120)) / 3.0
+avgCorrYld = (nz(corrGoldYld_30) + nz(corrGoldYld_60) + nz(corrGoldYld_120)) / 3.0
+avgCorrSlv = (nz(corrGoldSlv_30) + nz(corrGoldSlv_60) + nz(corrGoldSlv_120)) / 3.0
+avgCorrSPX = (nz(corrGoldSPX_30) + nz(corrGoldSPX_60) + nz(corrGoldSPX_120)) / 3.0
+avgCorrEUR = (nz(corrGoldEUR_30) + nz(corrGoldEUR_60) + nz(corrGoldEUR_120)) / 3.0
+
+stabDXY = math.abs(nz(corrGoldDXY_30) - nz(corrGoldDXY_120))
+stabYld = math.abs(nz(corrGoldYld_30) - nz(corrGoldYld_120))
+stabSlv = math.abs(nz(corrGoldSlv_30) - nz(corrGoldSlv_120))
+stabSPX = math.abs(nz(corrGoldSPX_30) - nz(corrGoldSPX_120))
+stabEUR = math.abs(nz(corrGoldEUR_30) - nz(corrGoldEUR_120))
+avgStability = (stabDXY + stabYld + stabSlv + stabSPX + stabEUR) / 5.0
+
+corrHealthDXY = dxyValid    ? (avgCorrDXY < -0.3 ? 100 : avgCorrDXY < 0 ? 70 : avgCorrDXY < 0.3 ? 40 : 20) : 0
+corrHealthYld = yieldValid  ? (avgCorrYld < -0.3 ? 100 : avgCorrYld < 0 ? 70 : avgCorrYld < 0.3 ? 40 : 20) : 0
+corrHealthSlv = silverValid ? (avgCorrSlv > 0.3 ? 100 : avgCorrSlv > 0 ? 70 : avgCorrSlv > -0.3 ? 40 : 20) : 0
+corrHealthSPX = spxValid    ? (avgCorrSPX > 0.3 ? 100 : avgCorrSPX > 0 ? 70 : avgCorrSPX > -0.3 ? 40 : 20) : 0
+corrHealthEUR = eurusdValid ? (avgCorrEUR > 0.3 ? 100 : avgCorrEUR > 0 ? 70 : avgCorrEUR > -0.3 ? 40 : 20) : 0
+avgCorrHealth = (corrHealthDXY + corrHealthYld + corrHealthSlv + corrHealthSPX + corrHealthEUR) / 5.0
+
+_wDXYr = math.min(math.abs(avgCorrDXY) * 100, 30)
+_wYldr = math.min(math.abs(avgCorrYld) * 100, 30)
+_wSlvr = math.min(math.abs(avgCorrSlv) * 100, 25)
+_wSPXr = spxValid    ? 15.0 : 0.0
+_wEURr = eurusdValid ? 20.0 : 0.0
+_wTot  = _wDXYr + _wYldr + _wSlvr + _wSPXr + _wEURr
+wDXY = _wTot > 0 ? _wDXYr / _wTot * 100 : 30.0
+wYld = _wTot > 0 ? _wYldr / _wTot * 100 : 25.0
+wSlv = _wTot > 0 ? _wSlvr / _wTot * 100 : 20.0
+wSPX = _wTot > 0 ? _wSPXr / _wTot * 100 : 15.0
+wEUR = _wTot > 0 ? _wEURr / _wTot * 100 : 20.0
+
+msDXY = dxyValid    ? (dxyBear ? wDXY : dxyBull ? -wDXY : 0.0) : 0.0
+msYld = yieldValid  ? (yieldFalling ? wYld : yieldRising ? -wYld : 0.0) : 0.0
+msSPX = spxValid    ? (spxBull ? wSPX : spxBear ? -wSPX : 0.0) : 0.0
+msEUR = eurusdValid ? (eurusdBull ? wEUR : eurusdBear ? -wEUR : 0.0) : 0.0
+msSlv = silverValid ? (silverClose > silverEMA ? wSlv : silverClose < silverEMA ? -wSlv : 0.0) : 0.0
+msMom = dxyValid    ? (dxyMomBear ? 10.0 : dxyMomBull ? -10.0 : 0.0) : 0.0
+
+macroStrengthScore = int(math.max(math.min(msDXY + msYld + msSPX + msEUR + msSlv + msMom, 100), -100))
+macroStrengthConf  = math.abs(macroStrengthScore)
+
+//=====================================================================
+// WEIGHTED TREND ENGINE
+//=====================================================================
+
+bullTrendScore = 0
+bullTrendScore += close > ema200  ? 25 : 0
+bullTrendScore += ema20 > ema50   ? 25 : 0
+bullTrendScore += diplus > diminus ? 20 : 0
+bullTrendScore += adxVal > adxThreshold ? 20 : 0
+bullTrendScore += close > ema50   ? 10 : 0
+
+bearTrendScore = 0
+bearTrendScore += close < ema200  ? 25 : 0
+bearTrendScore += ema20 < ema50   ? 25 : 0
+bearTrendScore += diminus > diplus ? 20 : 0
+bearTrendScore += adxVal > adxThreshold ? 20 : 0
+bearTrendScore += close < ema50   ? 10 : 0
+
+bullTrend = bullTrendScore >= trendThreshold
+bearTrend = bearTrendScore >= trendThreshold
+
+//=====================================================================
+// PIVOT ENGINE
+//=====================================================================
+
+pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLow  = ta.pivotlow(low,  pivotLen, pivotLen)
+
+var float activeResistance = na
+var float activeSupport    = na
+var float[] brokenResistances = array.new_float()
+var float[] brokenSupports    = array.new_float()
+var float   lastBrokenRes     = na
+var float   lastBrokenSup     = na
+
+bosResistanceSnap = activeResistance
+bosSupportSnap    = activeSupport
+
+if not na(pivotHigh)
+    if not na(activeResistance)
+        array.push(brokenResistances, activeResistance)
+        lastBrokenRes := activeResistance
+        if array.size(brokenResistances) > 20
+            array.shift(brokenResistances)
+    activeResistance := pivotHigh
+
+if not na(pivotLow)
+    if not na(activeSupport)
+        array.push(brokenSupports, activeSupport)
+        lastBrokenSup := activeSupport
+        if array.size(brokenSupports) > 20
+            array.shift(brokenSupports)
+    activeSupport := pivotLow
+
+if not na(activeResistance) and close > activeResistance and close[1] <= activeResistance[1] and volume > volSma20
+    array.push(brokenResistances, activeResistance)
+    lastBrokenRes := activeResistance
+    activeResistance := na
+    if array.size(brokenResistances) > 20
+        array.shift(brokenResistances)
+
+if not na(activeSupport) and close < activeSupport and close[1] >= activeSupport[1] and volume > volSma20
+    array.push(brokenSupports, activeSupport)
+    lastBrokenSup := activeSupport
+    activeSupport := na
+    if array.size(brokenSupports) > 20
+        array.shift(brokenSupports)
+
+resistanceLevel = activeResistance
+supportLevel    = activeSupport
+
+//=====================================================================
+// BOS / CHOCH
+//=====================================================================
+
+bullBOS = not na(bosResistanceSnap) and close > bosResistanceSnap and close[1] <= bosResistanceSnap[1] and bosResistanceSnap != lastBrokenRes and adxVal > adxThreshold and highVolume
+bearBOS = not na(bosSupportSnap)    and close < bosSupportSnap    and close[1] >= bosSupportSnap[1]    and bosSupportSnap  != lastBrokenSup  and adxVal > adxThreshold and highVolume
+
+// Simplified BOS for labels (no ADX/volume gate — fires on any structure break)
+bosLabelBull = not na(bosResistanceSnap) and close > bosResistanceSnap and close[1] <= bosResistanceSnap[1] and bosResistanceSnap != lastBrokenRes
+bosLabelBear = not na(bosSupportSnap)    and close < bosSupportSnap    and close[1] >= bosSupportSnap[1]    and bosSupportSnap  != lastBrokenSup
+
+chochLabelBull = bosLabelBull and bearTrend[1]
+chochLabelBear = bosLabelBear and bullTrend[1]
+
+bodySize    = math.abs(close - open)
+candleRange = high - low
+
+displacementUp   = showDisplacement and bodySize > adaptiveATR * dispMult and close > open and close > high[1] and candleRange > 0 and close >= (low + candleRange * 0.75)
+displacementDown = showDisplacement and bodySize > adaptiveATR * dispMult and close < open and close < low[1]  and candleRange > 0 and close <= (low + candleRange * 0.25)
+
+//=====================================================================
+// RSI DIVERGENCE FILTER
+//=====================================================================
+
+rsiBull    = ta.rsi(close, rsiLen)
+priceLL    = ta.lowest(low,   rsiDivLookback)
+priceHH    = ta.highest(high, rsiDivLookback)
+rsiLowest  = ta.lowest(rsiBull,  rsiDivLookback)
+rsiHighest = ta.highest(rsiBull, rsiDivLookback)
+
+bullRsiDiv = useRsiDivFilter ? (low <= priceLL * 1.001 and rsiBull > rsiLowest * 1.02) : true
+bearRsiDiv = useRsiDivFilter ? (high >= priceHH * 0.999 and rsiBull < rsiHighest * 0.98) : true
+
+//=====================================================================
+// STRUCTURE VISUALS — Plain text labels (no arrow/triangle shapes)
+// Guard vars prevent duplicate labels on script recalculation
+//=====================================================================
+
+// (BOS/CHOCH chart labels removed — detection kept for engines)
+
+//=====================================================================
+// EQH / EQL
+//=====================================================================
+
+eqTolerance = adaptiveATR * eqAtrMult
+
+var float swingHigh1 = na
+var float swingHigh2 = na
+var float swingLow1  = na
+var float swingLow2  = na
+
+if not na(pivotHigh)
+    swingHigh2 := swingHigh1
+    swingHigh1 := pivotHigh
+if not na(pivotLow)
+    swingLow2 := swingLow1
+    swingLow1 := pivotLow
+
+equalHighs = not na(swingHigh1) and not na(swingHigh2) and math.abs(swingHigh1 - swingHigh2) <= eqTolerance
+equalLows  = not na(swingLow1)  and not na(swingLow2)  and math.abs(swingLow1  - swingLow2)  <= eqTolerance
+
+var bool eqhPlotted = false
+var bool eqlPlotted = false
+if equalHighs and not eqhPlotted
+    eqhPlotted := true
+if not equalHighs
+    eqhPlotted := false
+if equalLows and not eqlPlotted
+    eqlPlotted := true
+if not equalLows
+    eqlPlotted := false
+
+// (EQH/EQL circle markers removed)
+
+//=====================================================================
+// VOLUME CLIMAX
+//=====================================================================
+
+volPercentile = ta.percentrank(volume, volLookback)
+climaxUp   = showClimax and recentBars and volPercentile >= volClimaxPerc and close > open
+climaxDown = showClimax and recentBars and volPercentile >= volClimaxPerc and close < open
+
+//=====================================================================
+// QUALITY SCORE FUNCTIONS
+//=====================================================================
+
+fvgQualityScore(bool isBull, float fvgGap, float atr_, float volPct_, bool htfBull_, bool htfBear_) =>
+    float disp = atr_ > 0 ? fvgGap / atr_ : 0.0
+    float s = 0.0
+    s += disp >= 2.5 ? 40.0 : disp >= 1.5 ? 30.0 : disp >= 1.0 ? 20.0 : disp >= 0.5 ? 10.0 : 0.0
+    s += volPct_ >= 90 ? 30.0 : volPct_ >= 75 ? 25.0 : volPct_ >= 60 ? 20.0 : volPct_ >= 40 ? 10.0 : 0.0
+    s += (isBull and htfBull_) or (not isBull and htfBear_) ? 20.0 : 0.0
+    s += 10.0
+    int(math.min(s, 100))
+
+obQualityScore(bool isBull, float body_, float atr_, float volPct_, bool htfBull_, bool htfBear_, bool cUp_, bool cDn_, bool dUp_, bool dDn_) =>
+    float disp = atr_ > 0 ? body_ / atr_ : 0.0
+    float s = 0.0
+    s += disp >= 2.5 ? 35.0 : disp >= 1.5 ? 28.0 : disp >= 1.0 ? 20.0 : disp >= 0.5 ? 12.0 : 0.0
+    s += volPct_ >= 90 ? 30.0 : volPct_ >= 75 ? 24.0 : volPct_ >= 60 ? 18.0 : volPct_ >= 40 ? 10.0 : 0.0
+    s += (isBull and htfBull_) or (not isBull and htfBear_) ? 20.0 : 0.0
+    s += (isBull and (cUp_ or dUp_)) or (not isBull and (cDn_ or dDn_)) ? 15.0 : 0.0
+    int(math.min(s, 100))
+
+//=====================================================================
+// FVG DETECTION ENGINE - full auto mode only (no manual override)
+//=====================================================================
+
+fvgDetected = showFVG and (high[2] < low[0] or low[2] > high[0])
+
+var float fvgHighUpper = na
+var float fvgLowLower  = na
+var int   fvgBarIndex  = -1
+var float fvgAtrAtDetect = na
+var float fvgVolPctAtDetect = na
+var bool  fvgActive     = false
+var bool  fvgWasBullish  = false
+
+if fvgDetected and not fvgActive
+    float gapLow  = high[2]
+    float gapHigh = low[0]
+    if low[2] > high[0]
+        gapLow  := low[0]
+        gapHigh := high[2]
+    if gapLow < gapHigh
+        fvgHighUpper    := gapHigh
+        fvgLowLower     := gapLow
+        fvgBarIndex     := bar_index
+        fvgAtrAtDetect  := adaptiveATR
+        fvgVolPctAtDetect := volPercentile
+        fvgActive       := true
+        fvgWasBullish   := low[2] > high[0]
+
+fvgActive := fvgActive and bar_index - fvgBarIndex <= fvgMaxBars and (fvgWasBullish ? close >= fvgLowLower - adaptiveATR * 0.5 : close <= fvgHighUpper + adaptiveATR * 0.5)
+
+fvgMitigated = fvgActive and ((fvgWasBullish and low <= fvgHighUpper) or (not fvgWasBullish and high >= fvgLowLower))
+
+if fvgMitigated
+    fvgActive := false
+
+float fvgGapSize = not na(fvgHighUpper) and not na(fvgLowLower) ? fvgHighUpper - fvgLowLower : na
+
+fvgUpperLine = fvgActive and fvgWasBullish     ? fvgLowLower  : fvgActive and not fvgWasBullish ? fvgHighUpper : na
+fvgLowerLine = fvgActive and fvgWasBullish     ? fvgHighUpper : fvgActive and not fvgWasBullish ? fvgLowLower  : na
+
+fvgScore = fvgActive and not na(fvgGapSize) and not na(fvgAtrAtDetect) and not na(fvgVolPctAtDetect) ? fvgQualityScore(fvgWasBullish, fvgGapSize, fvgAtrAtDetect, fvgVolPctAtDetect, htf1hBull, htf1hBear) : na
+
+//=====================================================================
+// ORDER BLOCK DETECTION
+//=====================================================================
+
+bullBodyLong  = close > open and bodySize > adaptiveATR * obAtrMult and (close - open) > (high - low) * 0.6
+bearBodyLong  = open > close and bodySize > adaptiveATR * obAtrMult and (open - close) > (high - low) * 0.6
+bullWickUp    = high - math.max(open, close) < bodySize * 0.3
+bearWickUp    = high - math.max(open, close) >= bodySize * 0.4
+bearWickDown  = math.min(open, close) - low   < bodySize * 0.3
+bullWickDown  = math.min(open, close) - low   >= bodySize * 0.4
+
+bullOB = showOB and bullBodyLong and bullWickUp and bearWickDown and volume > volSma20
+bearOB = showOB and bearBodyLong and bearWickUp and bullWickDown and volume > volSma20
+
+var float obBullLow  = na
+var float obBullHigh = na
+var float obBearLow  = na
+var float obBearHigh = na
+var int   obBullBar  = -1
+var int   obBearBar  = -1
+var bool  obBullActive = false
+var bool  obBearActive = false
+var float obBullVolPct = na
+var float obBearVolPct = na
+
+if bearOB and not obBearActive
+    obBearHigh    := high
+    obBearLow     := low
+    obBearBar     := bar_index
+    obBearVolPct  := volPercentile
+    obBearActive  := true
+
+if bullOB and not obBullActive
+    obBullHigh    := high
+    obBullLow     := low
+    obBullBar     := bar_index
+    obBullVolPct  := volPercentile
+    obBullActive  := true
+
+obBullActive := obBullActive and bar_index - obBullBar <= obMaxBars
+obBearActive := obBearActive and bar_index - obBearBar <= obMaxBars
+
+if obBullActive and close < obBullLow - adaptiveATR * 0.3
+    obBullActive := false
+if obBearActive and close > obBearHigh + adaptiveATR * 0.3
+    obBearActive := false
+
+obBullScore = obBullActive and not na(obBullHigh) and not na(obBullLow) and not na(adaptiveATR) and not na(obBullVolPct) ? obQualityScore(true, obBullHigh - obBullLow, adaptiveATR, obBullVolPct, htf1hBull, htf1hBear, displacementUp, displacementDown, climaxUp, climaxDown) : na
+obBearScore = obBearActive and not na(obBearHigh) and not na(obBearLow) and not na(adaptiveATR) and not na(obBearVolPct) ? obQualityScore(false, obBearHigh - obBearLow, adaptiveATR, obBearVolPct, htf1hBull, htf1hBear, displacementUp, displacementDown, climaxUp, climaxDown) : na
+
+//=====================================================================
+// SUPPORT / RESISTANCE - fractal + volume-weighted clustering
+//=====================================================================
+
+var float[] srLevels       = array.new_float()
+var float[] srStrengths    = array.new_float()
+var int   maxSRLevels      = 6
+var int   srScanLen        = 150
+
+if barstate.isconfirmed and bar_index > 100
+    for i = 1 to srScanLen
+        if i >= bar_index - 2
+            break
+        if not na(high[i]) and not na(high[i+1]) and not na(high[i-1])
+            if high[i] > high[i+1] and high[i] >= high[i-1]
+                float clusterThreshold = high[i] * 0.001
+                bool   alreadyExists = false
+                float  closestDist  = 1e10
+                int    closestIdx   = -1
+                int srCount = array.size(srLevels)
+                if srCount > 0
+                    for j = 0 to srCount - 1
+                        float lev = array.get(srLevels, j)
+                        if math.abs(lev - high[i]) / lev < clusterThreshold
+                            alreadyExists := true
+                            closestDist  := math.abs(lev - high[i])
+                            closestIdx   := j
+                            break
+                if not alreadyExists
+                    if array.size(srLevels) < maxSRLevels
+                        array.push(srLevels, high[i])
+                        array.push(srStrengths, 1.0)
+                    else
+                        int strCount = array.size(srStrengths)
+                        if strCount > 0
+                            int minIdx = 0
+                            float minStr = array.get(srStrengths, 0)
+                            for j = 1 to strCount - 1
+                                float s = array.get(srStrengths, j)
+                                if s < minStr
+                                    minStr := s
+                                    minIdx := j
+                            if minStr < 2.0
+                                array.set(srLevels, minIdx, high[i])
+                                array.set(srStrengths, minIdx, 1.0)
+
+resistanceCluster = array.size(srLevels) > 0 ? array.get(srLevels, 0) : na
+supportCluster    = array.size(srLevels) > 1 ? array.get(srLevels, 1) : na
+
+//=====================================================================
+// LIQUIDITY LEVELS
+//=====================================================================
+
+var float liquidHigh = na
+var float liquidLow  = na
+var int   liqScanBack = 30
+
+if barstate.isconfirmed and bar_index > liqScanBack
+    liquidHigh := ta.highest(high, liqScanBack)
+    liquidLow  := ta.lowest(low,  liqScanBack)
+
+bool tookPdH = not na(liquidHigh) and close > liquidHigh
+bool tookPdL = not na(liquidLow)  and close < liquidLow
+
+//=====================================================================
+// SMT DIVERGENCE
+//=====================================================================
+
+goldRSI = rsiVal
+_silverRSI =
+     request.security("OANDA:XAGUSD", timeframe.period,
+          ta.rsi(close, rsiLen)[1],
+          barmerge.gaps_on, barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+bool smtDataValid = showSMT and silverValid and not na(goldRSI) and not na(_silverRSI)
+
+smtBearPair = smtDataValid and goldBarDir > 0 and dxyBarDir_raw < 0 and goldRSI < _silverRSI and close > close[3]
+smtBullPair = smtDataValid and goldBarDir < 0 and dxyBarDir_raw > 0 and goldRSI > _silverRSI and close < close[3]
+
+bool smtDirValid = smtDataValid and goldBarDir != 0
+//=====================================================================
+// REGIME ENGINE
+//=====================================================================
+
+regimeScore   = int(math.round((adxVal / 100.0) * (atrPercentile > 70 ? 1.2 : 1.0) * 100.0))
+volRegime     = atrPercentile > 70 ? 100 : atrPercentile > 40 ? 60 : 30
+structureRegime = (htfAlignmentLong >= 2 or htfAlignmentShort >= 2) ? 100 : (htfAlignmentLong >= 1 or htfAlignmentShort >= 1) ? 60 : 30
+macroRegime   = (macroBull or macroBear) ? 100 : (macroBullVotes >= 2 or macroBearVotes >= 2) ? 60 : 30
+sessionRegime = sessionQuality >= 60 ? 100 : sessionQuality >= 30 ? 60 : 20
+
+regimeComposite = int(math.round((regimeScore * 0.30) + (volRegime * 0.15) + (structureRegime * 0.20) + (macroRegime * 0.20) + (sessionRegime * 0.15)))
+
+bool strongTrend  = regimeComposite >= 70
+bool moderateTrend = regimeComposite >= 40 and regimeComposite < 70
+bool weakTrend     = regimeComposite < 40
+
+//=====================================================================
+// LIQUIDITY POOL TRACKING
+//=====================================================================
+
+var float poolPdH  = na
+var float poolPdL  = na
+var float poolPwH  = na
+var float poolPwL  = na
+var float poolPmH  = na
+var float poolPmL  = na
+var float poolEqH  = na
+var float poolEqL  = na
+var float intraHigh = na
+var float intraLow  = na
+
+// True daily/weekly/monthly levels via request.security — all lookahead_off
+// PMH/PML: use last completed monthly bar (replaces ta.highest 720 — see audit issue #40)
+[dailyH, dailyL]   = request.security(syminfo.tickerid, "D",  [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[weeklyH, weeklyL] = request.security(syminfo.tickerid, "W",  [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[monthlyH, monthlyL] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+
+poolPdH := not na(dailyH)   ? dailyH   : ta.highest(high, pdlLen)
+poolPdL := not na(dailyL)   ? dailyL   : ta.lowest(low,   pdlLen)
+poolPwH := not na(weeklyH)  ? weeklyH  : ta.highest(high, pwlLen)
+poolPwL := not na(weeklyL)  ? weeklyL  : ta.lowest(low,   pwlLen)
+// PMH/PML: last completed monthly bar — non-repainting, precise, replaces 720-bar rolling
+poolPmH := not na(monthlyH) ? monthlyH : ta.highest(high, 480)
+poolPmL := not na(monthlyL) ? monthlyL : ta.lowest(low,   480)
+
+// EQH/EQL: set on new equal-high/low detection; invalidate (→ na) when price sweeps the level
+// This prevents stale EQH/EQL from persisting after they have been taken out
+if equalHighs
+    poolEqH := math.max(swingHigh1, swingHigh2)
+else if not na(poolEqH) and close > poolEqH
+    poolEqH := na   // swept — dissolve the level
+
+if equalLows
+    poolEqL := math.min(swingLow1, swingLow2)
+else if not na(poolEqL) and close < poolEqL
+    poolEqL := na   // swept — dissolve the level
+intraHigh := ta.highest(high, 1)
+intraLow  := ta.lowest(low,  1)
+
+bool ranPdH = not na(poolPdH) and close > poolPdH
+bool ranPdL = not na(poolPdL) and close < poolPdL
+bool ranPwH = not na(poolPwH) and close > poolPwH
+bool ranPwL = not na(poolPwL) and close < poolPwL
+bool ranPmH = not na(poolPmH) and close > poolPmH
+bool ranPmL = not na(poolPmL) and close < poolPmL
+bool ranEqH = not na(poolEqH) and close > poolEqH
+bool ranEqL = not na(poolEqL) and close < poolEqL
+
+//=====================================================================
+// S/R LEVELS TABLE PLOT
+//=====================================================================
+
+var line[] srLines = array.new_line()
+if barstate.islast
+    int srLineCount = array.size(srLines)
+    if srLineCount > 0
+        for i = 0 to srLineCount - 1
+            line.delete(array.get(srLines, i))
+    array.clear(srLines)
+    if array.size(srLevels) > 0
+        for i = 0 to array.size(srLevels) - 1
+            if i >= maxSRLevels
+                break
+            float lev = array.get(srLevels, i)
+            float srStr = array.get(srStrengths, i)
+            if not na(lev)
+                color levColor = srStr >= 3 ? color.new(#00C2FF, 30) : srStr >= 2 ? color.new(#C0C0C0, 40) : color.new(#808080, 50)
+                array.push(srLines, line.new(x1=bar_index - 1, y1=lev, x2=bar_index, y2=lev, color=levColor, width=1, style=line.style_solid))
+
+//=====================================================================
+// V26 ENGINE 1: STRUCTURE PERSISTENCE SCORE
+// Measures directional continuation after BOS/CHOCH
+//   Bull: higher highs AND higher lows after bull BOS
+//   Bear: lower highs AND lower lows after bear BOS
+// True structural dominance, not level survival
+//=====================================================================
+
+var float   structPersistEntryHigh = na
+var float   structPersistEntryLow  = na
+var bool    structPersistIsBull    = false
+var int     structPersistBars      = 0
+var float   structScore            = 0.0
+var float   structPersistPeak      = na
+var float   structPersistTrough    = na
+
+if bullBOS
+    structPersistEntryHigh := close
+    structPersistEntryLow  := low
+    structPersistIsBull    := true
+    structPersistBars      := 1
+    structPersistPeak      := high
+    structPersistTrough    := low
+else if bearBOS
+    structPersistEntryHigh := high
+    structPersistEntryLow  := close
+    structPersistIsBull    := false
+    structPersistBars      := 1
+    structPersistPeak      := high
+    structPersistTrough    := low
+else
+    if not na(structPersistEntryHigh)
+        // Bull persistence: must produce HH AND HL
+        if structPersistIsBull
+            bool newHH = high > structPersistPeak
+            bool newHL = low > structPersistTrough
+            if newHH
+                structPersistPeak := high
+            if newHL
+                structPersistTrough := low
+            if newHH or newHL
+                structPersistBars := structPersistBars + 1
+            else if not newHH and not newHL and structPersistBars > 3
+                structPersistEntryHigh := na
+                structPersistBars := 0
+        // Bear persistence: must produce LH AND LL
+        else
+            bool newLH = high < structPersistPeak
+            bool newLL = low < structPersistTrough
+            if newLH
+                structPersistPeak := high
+            if newLL
+                structPersistTrough := low
+            if newLH or newLL
+                structPersistBars := structPersistBars + 1
+            else if not newLH and not newLL and structPersistBars > 3
+                structPersistEntryHigh := na
+                structPersistBars := 0
+
+if structPersistBars > 0
+    float dr = structPersistIsBull and structPersistEntryLow > 0 ? (close - structPersistEntryLow) / adaptiveATR : not structPersistIsBull and structPersistEntryHigh > 0 ? (structPersistEntryHigh - close) / adaptiveATR : 0.0
+    int spBars = structPersistBars
+    int spDist = dr >= 2.0 ? 35 : dr >= 1.0 ? 25 : dr >= 0.5 ? 15 : 0
+    int spAdx  = adxVal > adxThreshold ? 20 : 0
+    structScore := (spBars >= 12 ? 45 : spBars >= 8 ? 35 : spBars >= 4 ? 25 : 15) + spDist + spAdx
+else
+    structScore := 0.0
+
+//=====================================================================  
+// V27 ENGINE 2: LIQUIDITY DESTINATION RANKING V2
+// Score = Pool Weight × Distance Score × HTF Alignment × Session Weight × Trend Weight
+// Pool weights: PDH/PDL=1.50, PWH/PWL=1.25, EQH/EQL=1.00
+// Dist score decays linearly from 100 at 0 ATR to 0 at liqProxMult ATR
+// Session weight: killzone=1.3, London/NY=1.15, Asian=0.8
+// Trend weight: aligned=1.2, neutral=1.0, opposing=0.7
+//=====================================================================
+
+float liqPWtPDH = 1.50
+float liqPWtPDL = 1.50
+float liqPWtPWH = 1.25
+float liqPWtPWL = 1.25
+float liqPWtPMH = 1.10
+float liqPWtPML = 1.10
+float liqPWtEQH = 1.00
+float liqPWtEQL = 1.00
+
+liqDistPDH = not na(poolPdH) ? math.abs(close - poolPdH) : 1e10
+liqDistPDL = not na(poolPdL) ? math.abs(close - poolPdL) : 1e10
+liqDistPWH = not na(poolPwH) ? math.abs(close - poolPwH) : 1e10
+liqDistPWL = not na(poolPwL) ? math.abs(close - poolPwL) : 1e10
+liqDistPMH = not na(poolPmH) ? math.abs(close - poolPmH) : 1e10
+liqDistPML = not na(poolPmL) ? math.abs(close - poolPmL) : 1e10
+liqDistEQH = not na(poolEqH) ? math.abs(close - poolEqH) : 1e10
+liqDistEQL = not na(poolEqL) ? math.abs(close - poolEqL) : 1e10
+
+liqDistScore(dist, atrM) => atrM > 0 ? math.max(100.0 - (dist / atrM) * (100.0 / liqProxMult), 0.0) : 0.0
+
+float liqDS_PDH = liqDistPDH < adaptiveATR * liqProxMult ? liqDistScore(liqDistPDH, adaptiveATR) : 0.0
+float liqDS_PDL = liqDistPDL < adaptiveATR * liqProxMult ? liqDistScore(liqDistPDL, adaptiveATR) : 0.0
+float liqDS_PWH = liqDistPWH < adaptiveATR * liqProxMult ? liqDistScore(liqDistPWH, adaptiveATR) : 0.0
+float liqDS_PWL = liqDistPWL < adaptiveATR * liqProxMult ? liqDistScore(liqDistPWL, adaptiveATR) : 0.0
+float liqDS_PMH = liqDistPMH < adaptiveATR * liqProxMult ? liqDistScore(liqDistPMH, adaptiveATR) : 0.0
+float liqDS_PML = liqDistPML < adaptiveATR * liqProxMult ? liqDistScore(liqDistPML, adaptiveATR) : 0.0
+float liqDS_EQH = liqDistEQH < adaptiveATR * liqProxMult ? liqDistScore(liqDistEQH, adaptiveATR) : 0.0
+float liqDS_EQL = liqDistEQL < adaptiveATR * liqProxMult ? liqDistScore(liqDistEQL, adaptiveATR) : 0.0
+
+// HTF alignment factor: 1.3 if HTF agrees, 1.15 if partial, 1.0 if neutral, 0.7 if opposes
+liqHTFMatch(poolIsBull) => (poolIsBull and htfBullGate) ? 1.3 : (poolIsBull and htfAlignmentLong >= 1) ? 1.15 : (not poolIsBull and htfBearGate) ? 1.3 : (not poolIsBull and htfAlignmentShort >= 1) ? 1.15 : 1.0
+
+// Session weight: killzone = 1.3, London/NY = 1.15, Asian/OFF = 0.8
+float liqSessionWt = inKillzone ? 1.3 : (inLondon or inNY) ? 1.15 : 0.8
+
+// Trend weight: aligned with pool direction = 1.2, neutral = 1.0, opposing = 0.7
+liqTrendWt(poolIsBull) => (poolIsBull and bullTrend) ? 1.2 : (not poolIsBull and bearTrend) ? 1.2 : (poolIsBull and bearTrend) ? 0.7 : (not poolIsBull and bullTrend) ? 0.7 : 1.0
+
+// Composite score = Pool Weight × Distance Score × HTF Alignment × Session Weight × Trend Weight
+float liqScorePDH = liqDS_PDH > 0 ? liqPWtPDH * liqDS_PDH * liqHTFMatch(true)  * liqSessionWt * liqTrendWt(true)  : 0.0
+float liqScorePDL = liqDS_PDL > 0 ? liqPWtPDL * liqDS_PDL * liqHTFMatch(false) * liqSessionWt * liqTrendWt(false) : 0.0
+float liqScorePWH = liqDS_PWH > 0 ? liqPWtPWH * liqDS_PWH * liqHTFMatch(true)  * liqSessionWt * liqTrendWt(true)  : 0.0
+float liqScorePWL = liqDS_PWL > 0 ? liqPWtPWL * liqDS_PWL * liqHTFMatch(false) * liqSessionWt * liqTrendWt(false) : 0.0
+float liqScorePMH = liqDS_PMH > 0 ? liqPWtPMH * liqDS_PMH * liqHTFMatch(true)  * liqSessionWt * liqTrendWt(true)  : 0.0
+float liqScorePML = liqDS_PML > 0 ? liqPWtPML * liqDS_PML * liqHTFMatch(false) * liqSessionWt * liqTrendWt(false) : 0.0
+float liqScoreEQH = liqDS_EQH > 0 ? liqPWtEQH * liqDS_EQH * liqHTFMatch(true)  * liqSessionWt * liqTrendWt(true)  : 0.0
+float liqScoreEQL = liqDS_EQL > 0 ? liqPWtEQL * liqDS_EQL * liqHTFMatch(false) * liqSessionWt * liqTrendWt(false) : 0.0
+
+// Rank by composite score + compute secondary
+string liqDestLabel = "—"
+int    liqDestScore = 0
+float  liqDestDist  = 1e10
+string liqDestSecondary = ""
+int    liqDestScoreSecondary = 0
+string liqDestConfidence = ""
+
+float liqMaxScore = math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL)))))))
+float liqSecondScore = 0.0
+if liqMaxScore > 0
+    if liqScorePDH >= liqMaxScore
+        liqDestLabel := "PDH"
+        liqDestScore := int(math.round(liqScorePDH))
+        liqDestDist  := liqDistPDH
+        liqSecondScore := math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScorePDL >= liqMaxScore
+        liqDestLabel := "PDL"
+        liqDestScore := int(math.round(liqScorePDL))
+        liqDestDist  := liqDistPDL
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScorePWH >= liqMaxScore
+        liqDestLabel := "PWH"
+        liqDestScore := int(math.round(liqScorePWH))
+        liqDestDist  := liqDistPWH
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScorePWL >= liqMaxScore
+        liqDestLabel := "PWL"
+        liqDestScore := int(math.round(liqScorePWL))
+        liqDestDist  := liqDistPWL
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScorePMH >= liqMaxScore
+        liqDestLabel := "PMH"
+        liqDestScore := int(math.round(liqScorePMH))
+        liqDestDist  := liqDistPMH
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScorePML >= liqMaxScore
+        liqDestLabel := "PML"
+        liqDestScore := int(math.round(liqScorePML))
+        liqDestDist  := liqDistPML
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScoreEQH, liqScoreEQL))))))
+    else if liqScoreEQH >= liqMaxScore
+        liqDestLabel := "EQH"
+        liqDestScore := int(math.round(liqScoreEQH))
+        liqDestDist  := liqDistEQH
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, liqScoreEQL))))))
+    else
+        liqDestLabel := "EQL"
+        liqDestScore := int(math.round(liqScoreEQL))
+        liqDestDist  := liqDistEQL
+        liqSecondScore := math.max(liqScorePDH, math.max(liqScorePDL, math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, liqScoreEQH))))))
+
+    // Secondary target
+    if liqSecondScore >= liqMaxScore * 0.5
+        if liqScorePDH > 0 and liqScorePDH >= liqSecondScore and liqDestLabel != "PDH"
+            liqDestSecondary := "PDH"
+            liqDestScoreSecondary := int(math.round(liqScorePDH))
+        else if liqScorePDL > 0 and liqScorePDL >= liqSecondScore and liqDestLabel != "PDL"
+            liqDestSecondary := "PDL"
+            liqDestScoreSecondary := int(math.round(liqScorePDL))
+        else if liqScorePWH > 0 and liqScorePWH >= liqSecondScore and liqDestLabel != "PWH"
+            liqDestSecondary := "PWH"
+            liqDestScoreSecondary := int(math.round(liqScorePWH))
+        else if liqScorePWL > 0 and liqScorePWL >= liqSecondScore and liqDestLabel != "PWL"
+            liqDestSecondary := "PWL"
+            liqDestScoreSecondary := int(math.round(liqScorePWL))
+        else if liqScorePMH > 0 and liqScorePMH >= liqSecondScore and liqDestLabel != "PMH"
+            liqDestSecondary := "PMH"
+            liqDestScoreSecondary := int(math.round(liqScorePMH))
+        else if liqScorePML > 0 and liqScorePML >= liqSecondScore and liqDestLabel != "PML"
+            liqDestSecondary := "PML"
+            liqDestScoreSecondary := int(math.round(liqScorePML))
+        else if liqScoreEQH > 0 and liqScoreEQH >= liqSecondScore and liqDestLabel != "EQH"
+            liqDestSecondary := "EQH"
+            liqDestScoreSecondary := int(math.round(liqScoreEQH))
+        else if liqScoreEQL > 0 and liqScoreEQL >= liqSecondScore and liqDestLabel != "EQL"
+            liqDestSecondary := "EQL"
+            liqDestScoreSecondary := int(math.round(liqScoreEQL))
+
+// Destination confidence: difference between primary and secondary as %
+int liqScoreDiff = liqDestScore - liqDestScoreSecondary
+liqDestConfidence := liqDestScore > 0 ? (liqScoreDiff >= 30 ? "HIGH" : liqScoreDiff >= 15 ? "MEDIUM" : "LOW") : ""
+
+// Tertiary target
+string liqDestTertiary = ""
+int    liqDestScoreTertiary = 0
+float liqThirdScore = 0.0
+if liqMaxScore > 0
+    // Compute third best from remaining pools (exclude primary and secondary)
+    if liqDestLabel == "PDH"
+        liqThirdScore := math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))
+    else if liqDestLabel == "PDL"
+        liqThirdScore := math.max(liqScorePWH, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))
+    else if liqDestLabel == "PWH"
+        liqThirdScore := math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))
+    else if liqDestLabel == "PWL"
+        liqThirdScore := math.max(liqScorePWH, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL))))
+    else if liqDestLabel == "PMH"
+        liqThirdScore := math.max(liqScorePWL, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL)))
+    else if liqDestLabel == "PML"
+        liqThirdScore := math.max(liqScorePWH, math.max(liqScorePMH, math.max(liqScoreEQH, liqScoreEQL)))
+    else if liqDestLabel == "EQH"
+        liqThirdScore := math.max(liqScorePWL, math.max(liqScorePML, math.max(liqScoreEQL, 0.0)))
+    else if liqDestLabel == "EQL"
+        liqThirdScore := math.max(liqScorePMH, math.max(liqScorePWH, 0.0))
+    // Account for secondary also being excluded
+    if liqThirdScore >= liqMaxScore * 0.4
+        if liqDestLabel == "PDH" and liqDestSecondary == "PDL"
+            liqThirdScore := math.max(liqScorePWH, math.max(liqScorePWL, math.max(liqScorePMH, math.max(liqScorePML, math.max(liqScoreEQH, liqScoreEQL)))))
+        // Simplified: take the score, find the label
+        if liqScorePDH > 0 and liqScorePDH >= liqThirdScore and liqDestLabel != "PDH" and liqDestSecondary != "PDH"
+            liqDestTertiary := "PDH"
+            liqDestScoreTertiary := int(math.round(liqScorePDH))
+        else if liqScorePDL > 0 and liqScorePDL >= liqThirdScore and liqDestLabel != "PDL" and liqDestSecondary != "PDL"
+            liqDestTertiary := "PDL"
+            liqDestScoreTertiary := int(math.round(liqScorePDL))
+        else if liqScorePWH > 0 and liqScorePWH >= liqThirdScore and liqDestLabel != "PWH" and liqDestSecondary != "PWH"
+            liqDestTertiary := "PWH"
+            liqDestScoreTertiary := int(math.round(liqScorePWH))
+        else if liqScorePWL > 0 and liqScorePWL >= liqThirdScore and liqDestLabel != "PWL" and liqDestSecondary != "PWL"
+            liqDestTertiary := "PWL"
+            liqDestScoreTertiary := int(math.round(liqScorePWL))
+        else if liqScorePMH > 0 and liqScorePMH >= liqThirdScore and liqDestLabel != "PMH" and liqDestSecondary != "PMH"
+            liqDestTertiary := "PMH"
+            liqDestScoreTertiary := int(math.round(liqScorePMH))
+        else if liqScorePML > 0 and liqScorePML >= liqThirdScore and liqDestLabel != "PML" and liqDestSecondary != "PML"
+            liqDestTertiary := "PML"
+            liqDestScoreTertiary := int(math.round(liqScorePML))
+        else if liqScoreEQH > 0 and liqScoreEQH >= liqThirdScore and liqDestLabel != "EQH" and liqDestSecondary != "EQH"
+            liqDestTertiary := "EQH"
+            liqDestScoreTertiary := int(math.round(liqScoreEQH))
+        else if liqScoreEQL > 0 and liqScoreEQL >= liqThirdScore and liqDestLabel != "EQL" and liqDestSecondary != "EQL"
+            liqDestTertiary := "EQL"
+            liqDestScoreTertiary := int(math.round(liqScoreEQL))
+
+// Liquidity confidence label
+string liqConfLabel = liqDestConfidence
+
+// ---- Liquidity Destination Probability (Part 9) ----
+// Probability that price reaches the identified destination
+float liqReachProb = 50.0
+if liqMaxScore > 0
+    // Base probability from trend + HTF + macro + session
+    float baseProb = 50.0
+    bool destIsBull = liqDestLabel == "PDH" or liqDestLabel == "PWH" or liqDestLabel == "PMH" or liqDestLabel == "EQH"
+    baseProb += (destIsBull and bullTrend) or (not destIsBull and bearTrend) ? 12.0 : 0.0
+    baseProb += (destIsBull and htfBullGate) or (not destIsBull and htfBearGate) ? 10.0 : 0.0
+    baseProb += macroStrengthScore > 0 and destIsBull ? 8.0 : macroStrengthScore < 0 and not destIsBull ? 8.0 : 0.0
+    baseProb += regimeComposite >= 70 ? 8.0 : regimeComposite >= 40 ? 4.0 : 0.0
+    // Distance penalty: closer = higher probability
+    float distPenalty = adaptiveATR > 0 and liqDestDist < 1e10 ? math.min(liqDestDist / (adaptiveATR * 3.0) * 30.0, 30.0) : 15.0
+    baseProb := baseProb - distPenalty
+    liqReachProb := math.min(math.max(baseProb, 5.0), 95.0)
+
+// Liquidity sweep detection: price touched a known liquidity level and reversed
+liqSweepBear = (not na(poolPdH) and high >= poolPdH and close < poolPdH) or (not na(poolPwH) and high >= poolPwH and close < poolPwH) or (not na(poolPmH) and high >= poolPmH and close < poolPmH)
+liqSweepBull = (not na(poolPdL) and low <= poolPdL and close > poolPdL) or (not na(poolPwL) and low <= poolPwL and close > poolPwL) or (not na(poolPmL) and low <= poolPmL and close > poolPmL)
+
+//=====================================================================
+// V26 ENGINE 3: MTF CONFLUENCE ENGINE  
+// Aggregates directional agreement across 5 TF's + 5 macro assets
+//=====================================================================
+
+mtfVotesBull = 0
+mtfVotesBull += htf5mBull  ? 1 : 0
+mtfVotesBull += htf15mBull ? 1 : 0
+mtfVotesBull += htf1hBull  ? 1 : 0
+mtfVotesBull += htf4hBull  ? 1 : 0
+mtfVotesBull += htfDBull   ? 1 : 0
+
+mtfVotesBear = 0
+mtfVotesBear += htf5mBear  ? 1 : 0
+mtfVotesBear += htf15mBear ? 1 : 0
+mtfVotesBear += htf1hBear  ? 1 : 0
+mtfVotesBear += htf4hBear  ? 1 : 0
+mtfVotesBear += htfDBear   ? 1 : 0
+
+macroVotesBull = macroBullVotes
+macroVotesBear = macroBearVotes
+
+mtfConfluenceBull = mtfVotesBull + macroVotesBull
+mtfConfluenceBear = mtfVotesBear + macroVotesBear
+
+mtfConfluenceScore = int(math.round((mtfConfluenceBull - mtfConfluenceBear) / 9.0 * 100.0))
+mtfConfluenceMag   = math.abs(mtfConfluenceScore)
+
+mtfAgreementHigh   = mtfConfluenceMag >= 60
+mtfAgreementMed    = mtfConfluenceMag >= 30 and mtfConfluenceMag < 60
+mtfAgreementLow    = mtfConfluenceMag < 30
+
+//=====================================================================
+// V26 ENGINE 4: MACRO INTELLIGENCE ENGINE
+// Weighted directional synthesis from 5 macro inputs
+//=====================================================================
+
+macroIntelScore = macroStrengthScore
+macroIntelConf  = macroStrengthConf
+macroIntelValid = dxyValid or yieldValid or spxValid or eurusdValid or silverValid
+
+string macroIntelLabel = macroIntelValid ? (macroIntelScore >= 40 ? "BULL" : macroIntelScore <= -40 ? "BEAR" : macroIntelScore >= 15 ? "BULL-ISH" : macroIntelScore <= -15 ? "BEAR-ISH" : "MIXED") : "N/A"
+
+//=====================================================================
+// V27 ENGINE 5: BIAS SCORES (ordinal evidence-weighted, NOT probabilities)
+// Each bias score is a simple sum of independent evidence factors.
+// Scores do NOT sum to 100 — they are ordinal rankings, not probabilities.
+// Evidence streams (all independent):
+//   STRUCTURE  = BOS/CHOCH/trend
+//   LIQUIDITY  = Pool runs + FVG/OB zones
+//   MACRO      = 5-asset directional votes
+//   HTF        = 5TF alignment
+//   MOMENTUM   = RSI divergence
+//   SESSION    = London/NY quality
+//=====================================================================
+
+// Evidence scores (0-100 each, independent per direction)
+biasStructBull = bullTrend ? 30 : 0
+biasStructBear = bearTrend ? 30 : 0
+biasLiqBull    = (bullBOS or displacementUp) ? 20 : 0
+biasLiqBear    = (bearBOS or displacementDown) ? 20 : 0
+biasMacroBull  = macroBull ? 25 : 0
+biasMacroBear  = macroBear ? 25 : 0
+biasHTFBull    = htfBullGate ? 25 : (htfAlignmentLong >= 1 ? 10 : 0)
+biasHTFBear    = htfBearGate ? 25 : (htfAlignmentShort >= 1 ? 10 : 0)
+biasMomBull    = bullRsiDiv ? 15 : 0
+biasMomBear    = bearRsiDiv ? 15 : 0
+biasSessBull   = sessionQuality >= 50 ? 15 : sessionQuality >= 30 ? 8 : 0
+biasSessBear   = sessionQuality >= 50 ? 15 : sessionQuality >= 30 ? 8 : 0
+
+bullBiasScore = biasStructBull + biasLiqBull + biasMacroBull + biasHTFBull + biasMomBull + biasSessBull
+bearBiasScore = biasStructBear + biasLiqBear + biasMacroBear + biasHTFBear + biasMomBear + biasSessBear
+rangeBiasScore = (regimeRanging ? 40 : 0) + (regimeDead ? 50 : 0) + (mtfAgreementLow ? 30 : 0) + (not macroBull and not macroBear and macroIntelValid ? 20 : 0) + (sessionQuality < 30 ? 15 : 0) + (avgStability > 0.3 ? 15 : 0)
+
+biasLabel = bullBiasScore >= 80 ? "BULL" : bearBiasScore >= 80 ? "BEAR" : rangeBiasScore >= 80 ? "RANGE" : bullBiasScore > bearBiasScore and bullBiasScore > rangeBiasScore ? "BULL-ISH" : bearBiasScore > bullBiasScore and bearBiasScore > rangeBiasScore ? "BEAR-ISH" : "NEUTRAL"
+
+//=====================================================================
+// V27 ENGINE 6: CONFIDENCE SCORE 
+// Equal-weight (20%) from 5 independent dimensions:
+//   Structure | MTF | Liquidity | Macro | Session
+// Output: numeric 0-100 + label (LOW/MEDIUM/HIGH/EXTREME)
+//=====================================================================
+
+confStruct = structureRegime >= 80 ? 100 : structureRegime >= 50 ? 60 : structureRegime >= 20 ? 30 : 10
+confMTF     = int(math.round((htfAlignmentLong + htfAlignmentShort) * 100.0 / 6.0))
+confLiquidity = 0
+confLiquidity += bullBOS or bearBOS ? 25 : 0
+confLiquidity += fvgActive or obBullActive or obBearActive ? 25 : 0
+confLiquidity += (ranPdH or ranPdL or ranPwH or ranPwL or ranEqH or ranEqL) ? 25 : 0
+confLiquidity += liqDestScore >= 50 ? 25 : 0
+confMacro   = macroIntelConf >= 60 ? 100 : macroIntelConf >= 30 ? 60 : macroIntelConf >= 10 ? 30 : 10
+confSession = sessionRegime >= 80 ? 100 : sessionRegime >= 50 ? 60 : sessionRegime >= 20 ? 30 : 10
+
+confidenceScore = int(math.round((confStruct * 20 + confMTF * 20 + confLiquidity * 20 + confMacro * 20 + confSession * 20) / 100.0))
+
+string confLabel = confidenceScore >= 85 ? "EXTREME" : confidenceScore >= 65 ? "HIGH" : confidenceScore >= 40 ? "MEDIUM" : "LOW"
+// (confColor removed — dashboard uses dashConfColor instead)
+
+regimeConfidence = confidenceScore
+regimeConfLow   = confidenceScore < 30
+regimeConfMed   = confidenceScore >= 30 and confidenceScore < 60
+regimeConfHigh  = confidenceScore >= 60
+
+//=====================================================================
+// STATISTICAL PROBABILITY ENGINE (Part 5)
+// Multi-factor probability framework — Bull/Bear/Range sum to 100%
+// Uses 7 independent evidence streams
+//=====================================================================
+
+// Normalize each factor to 0-100 for bull and bear directions
+float probTrendBull   = bullTrendScore
+float probTrendBear   = bearTrendScore
+float probStructBull  = structScore >= 50 ? structScore : 0.0
+float probStructBear  = structScore > 0 ? 100.0 - structScore : 50.0
+float probFlowBull    = diplus > diminus ? (diplus / (diplus + diminus)) * 100.0 : 30.0
+float probFlowBear    = diminus > diplus ? (diminus / (diplus + diminus)) * 100.0 : 30.0
+float probMacroBull   = macroStrengthScore > 0 ? macroStrengthScore : 0.0
+float probMacroBear   = macroStrengthScore < 0 ? math.abs(macroStrengthScore) : 0.0
+float probLiqBull     = (liqScorePDH + liqScorePWH + liqScorePMH + liqScoreEQH) > (liqScorePDL + liqScorePWL + liqScorePML + liqScoreEQL) ? 60.0 : 30.0
+float probLiqBear     = (liqScorePDL + liqScorePWL + liqScorePML + liqScoreEQL) > (liqScorePDH + liqScorePWH + liqScorePMH + liqScoreEQH) ? 60.0 : 30.0
+float probSessionBull = sessionQuality >= 50 ? sessionQuality * 0.8 : sessionQuality * 0.5
+float probSessionBear = sessionQuality >= 50 ? sessionQuality * 0.5 : sessionQuality * 0.8
+float probCorrBull    = avgCorrHealth >= 40 ? avgCorrHealth : 30.0
+float probCorrBear    = avgCorrHealth >= 40 ? 30.0 : avgCorrHealth
+float probMrBull      = mrBullScore
+float probMrBear      = mrBearScore
+
+// Weighted aggregate (weights sum to 1.0)
+float wTrend    = 0.20
+float wStruct   = 0.18
+float wFlow     = 0.15
+float wMacro    = 0.15
+float wLiq      = 0.12
+float wSession  = 0.10
+float wCorr     = 0.05
+float wMR       = 0.05
+
+// Adjust weights based on regime
+float adjW = regimeTrending ? 1.0 : regimeRanging ? 0.85 : 0.70
+float rawBullProb = (probTrendBull * wTrend + probStructBull * wStruct + probFlowBull * wFlow + probMacroBull * wMacro + probLiqBull * wLiq + probSessionBull * wSession + probCorrBull * wCorr + probMrBull * wMR) * adjW
+float rawBearProb = (probTrendBear * wTrend + probStructBear * wStruct + probFlowBear * wFlow + probMacroBear * wMacro + probLiqBear * wLiq + probSessionBear * wSession + probCorrBear * wCorr + probMrBear * wMR) * adjW
+
+// Normalize to sum 100% with minimum floor of 5%
+float totalRaw = rawBullProb + rawBearProb
+float bullProb = totalRaw > 0 ? math.round(rawBullProb / totalRaw * 100.0) : 50.0
+float bearProb = totalRaw > 0 ? math.round(rawBearProb / totalRaw * 100.0) : 50.0
+float rangeProb = 100.0 - bullProb - bearProb
+if rangeProb < 0
+    float excess = math.abs(rangeProb)
+    rangeProb := 0.0
+    float ratio = bullProb / (bullProb + bearProb)
+    bullProb := math.max(bullProb - excess * ratio, 5.0)
+    bearProb := 100.0 - bullProb
+
+// Floor check
+if bullProb < 5.0 and bearProb < 5.0
+    bullProb := 50.0
+    bearProb := 50.0
+    rangeProb := 0.0
+if bullProb > 95.0
+    bullProb := 95.0
+    bearProb := math.max(bearProb, 5.0)
+    rangeProb := 100.0 - bullProb - bearProb
+if bearProb > 95.0
+    bearProb := 95.0
+    bullProb := math.max(bullProb, 5.0)
+    rangeProb := 100.0 - bullProb - bearProb
+
+string probLabel = "Bull " + str.tostring(bullProb, "0") + "% / Bear " + str.tostring(bearProb, "0") + "% / Range " + str.tostring(rangeProb, "0") + "%"
+color probColor  = bullProb >= 60 ? cBull : bearProb >= 60 ? cBear : cNeutral
+
+//=====================================================================
+// HISTORICAL ANALOG ANALYSIS (Part 6)
+// Compare current market state against historical occurrences
+// 500-bar lookback, match on ADX/ATR/HTF/Structure/Liquidity
+//=====================================================================
+
+float histBullRate = 50.0
+float histBearRate = 50.0
+float histRangeRate = 0.0
+
+if bar_index > 220
+    // Categorize current state
+    int currAdxCat = adxVal > adxThreshold ? 2 : adxVal > 15 ? 1 : 0
+    int currAtrCat = atrPercentile >= 70 ? 2 : atrPercentile >= 30 ? 1 : 0
+    int currHtfCat = htfBullGate ? 2 : htfBearGate ? 1 : 0
+    float currStruct = structScore
+    float currLiqPos = not na(poolPdH) and not na(poolPdL) ? (close - poolPdL) / (poolPdH - poolPdL) : 0.5
+
+    // Pre-compute ATR percentile categories using historical sma (simpler approach)
+    float histAtrSma200 = ta.sma(adaptiveATR, 200)
+    float histAtrStd200 = ta.stdev(adaptiveATR, 200)
+
+    int matchCount = 0
+    int bullOutcomes = 0
+    int bearOutcomes = 0
+    int rangeOutcomes = 0
+
+    if barstate.isconfirmed and bar_index > 220
+        for i = 11 to 510
+            // Compare current state against historical bar i
+            int adxCat = adxVal[i] > adxThreshold ? 2 : adxVal[i] > 15 ? 1 : 0
+            int atrCat = histAtrStd200 > 0 and adaptiveATR[i] > histAtrSma200 + histAtrStd200 ? 2 : adaptiveATR[i] > histAtrSma200 - histAtrStd200 ? 1 : 0
+            int htfCat = close[i] > ta.ema(close, 200)[i] ? 2 : close[i] < ta.ema(close, 200)[i] ? 1 : 0
+            float structI = structScore[i]
+            float liqPosI = 0.5
+
+            int similarity = 0
+            similarity += adxCat == currAdxCat ? 25 : 0
+            similarity += atrCat == currAtrCat ? 20 : 0
+            similarity += htfCat == currHtfCat ? 25 : 0
+            similarity += math.abs(structI - currStruct) <= 25 ? 15 : 0
+            similarity += math.abs(liqPosI - currLiqPos) <= 0.3 ? 15 : 0
+
+            if similarity >= 60
+                matchCount += 1
+                float futureChange = close[i - 5] - close[i]
+                float futureRange  = ta.highest(high, 5)[i - 5] - ta.lowest(low, 5)[i - 5]
+                if futureRange > 0
+                    if futureChange > futureRange * 0.3
+                        bullOutcomes += 1
+                    else if futureChange < -futureRange * 0.3
+                        bearOutcomes += 1
+                    else
+                        rangeOutcomes += 1
+
+    if matchCount >= 3
+        float total = bullOutcomes + bearOutcomes + rangeOutcomes
+        histBullRate := math.round(bullOutcomes / total * 100.0)
+        histBearRate := math.round(bearOutcomes / total * 100.0)
+        histRangeRate := 100.0 - histBullRate - histBearRate
+    else
+        histBullRate := bullProb
+        histBearRate := bearProb
+        histRangeRate := rangeProb
+
+//=====================================================================
+// SCENARIO ANALYSIS — WHAT-IF ENGINE (Part 8)
+// Calculate probability scenarios for key levels
+//=====================================================================
+
+float scenarioPdhBreak = 50.0
+float scenarioPdlBreak = 50.0
+float scenarioVwapHold = 50.0
+float scenarioVwapFail = 50.0
+
+if not na(poolPdH)
+    // PDH Break = continuation probability
+    float pdhContFactor = 50.0
+    pdhContFactor += bullTrend ? 15.0 : bearTrend ? -10.0 : 0.0
+    pdhContFactor += htfBullGate ? 12.0 : htfBearGate ? -8.0 : 0.0
+    pdhContFactor += macroStrengthScore > 0 ? 10.0 : macroStrengthScore < 0 ? -10.0 : 0.0
+    pdhContFactor += confidenceScore >= 60 ? 8.0 : 0.0
+    pdhContFactor += adxVal > adxThreshold ? 5.0 : 0.0
+    scenarioPdhBreak := math.min(math.max(pdhContFactor, 10.0), 90.0)
+
+if not na(poolPdL)
+    float pdlContFactor = 50.0
+    pdlContFactor += bearTrend ? 15.0 : bullTrend ? -10.0 : 0.0
+    pdlContFactor += htfBearGate ? 12.0 : htfBullGate ? -8.0 : 0.0
+    pdlContFactor += macroStrengthScore < 0 ? 10.0 : macroStrengthScore > 0 ? -10.0 : 0.0
+    pdlContFactor += confidenceScore >= 60 ? 8.0 : 0.0
+    pdlContFactor += adxVal > adxThreshold ? 5.0 : 0.0
+    scenarioPdlBreak := math.min(math.max(pdlContFactor, 10.0), 90.0)
+
+// VWAP hold/fail scenarios
+float vwapDist = math.abs(distVwapATR)
+if vwapDist < 1.0 and not na(vwapVal)
+    // VWAP hold = bounce (close near VWAP + bullish factors)
+    float holdFactor = 50.0
+    holdFactor += bullTrend ? 12.0 : bearTrend ? -12.0 : 0.0
+    holdFactor += htfBullGate ? 10.0 : htfBearGate ? -10.0 : 0.0
+    holdFactor += macroStrengthScore > 0 ? 8.0 : macroStrengthScore < 0 ? -8.0 : 0.0
+    holdFactor += probLiqBull > probLiqBear ? 8.0 : -8.0
+    holdFactor += adxVal > adxThreshold ? 5.0 : 0.0
+    scenarioVwapHold := math.min(math.max(holdFactor, 10.0), 90.0)
+
+    // VWAP fail = breakdown
+    float failFactor = 50.0
+    failFactor += bearTrend ? 12.0 : bullTrend ? -12.0 : 0.0
+    failFactor += htfBearGate ? 10.0 : htfBullGate ? -10.0 : 0.0
+    failFactor += macroStrengthScore < 0 ? 8.0 : macroStrengthScore > 0 ? -8.0 : 0.0
+    failFactor += probLiqBear > probLiqBull ? 8.0 : -8.0
+    failFactor += adxVal > adxThreshold ? 5.0 : 0.0
+    scenarioVwapFail := math.min(math.max(failFactor, 10.0), 90.0)
+
+// PDH/PDL Reach Probability (forward-looking, based on 7-factor framework)
+float pdhRaw2 = probTrendBull * wTrend + probStructBull * wStruct + probFlowBull * wFlow + probMacroBull * wMacro + probLiqBull * wLiq + probSessionBull * wSession + probCorrBull * wCorr + probMrBull * wMR
+float pdlRaw2 = probTrendBear * wTrend + probStructBear * wStruct + probFlowBear * wFlow + probMacroBear * wMacro + probLiqBear * wLiq + probSessionBear * wSession + probCorrBear * wCorr + probMrBear * wMR
+float totalR = pdhRaw2 + pdlRaw2
+float pdhReachProb = totalR > 0 ? math.round(pdhRaw2 / totalR * 100.0) : 50.0
+float pdlReachProb = 100.0 - pdhReachProb
+if pdhReachProb < 5.0
+    pdhReachProb := 5.0
+    pdlReachProb := 95.0
+if pdlReachProb < 5.0
+    pdlReachProb := 5.0
+    pdhReachProb := 95.0
+
+// Historical PDH/PDL reach probability (from analog engine outcomes)
+float histPdhReach = not na(histBullRate) ? math.min(math.max(histBullRate, 5.0), 95.0) : 50.0
+float histPdlReach = 100.0 - histPdhReach
+if histPdhReach < 5.0
+    histPdhReach := 5.0
+    histPdlReach := 95.0
+if histPdlReach < 5.0
+    histPdlReach := 5.0
+    histPdhReach := 95.0
+
+// Per-target reach probabilities for PWH/PWL/PMH/PML/EQH/EQL (M6-A)
+// Distribute bull/bear reach prob across targets proportionally to liq scores
+float bullPoolTotal = liqScorePDH + liqScorePWH + liqScorePMH + liqScoreEQH + 1.0
+float bearPoolTotal = liqScorePDL + liqScorePWL + liqScorePML + liqScoreEQL + 1.0
+float pwhReachProb = bullPoolTotal > 1.0 ? math.round(liqScorePWH / bullPoolTotal * pdhReachProb) : 12.0
+float pwlReachProb = bearPoolTotal > 1.0 ? math.round(liqScorePWL / bearPoolTotal * pdlReachProb) : 12.0
+float pmhReachProb = bullPoolTotal > 1.0 ? math.round(liqScorePMH / bullPoolTotal * pdhReachProb) : 12.0
+float pmlReachProb = bearPoolTotal > 1.0 ? math.round(liqScorePML / bearPoolTotal * pdlReachProb) : 12.0
+float eqhReachProb = bullPoolTotal > 1.0 ? math.round(liqScoreEQH / bullPoolTotal * pdhReachProb) : 12.0
+float eqlReachProb = bearPoolTotal > 1.0 ? math.round(liqScoreEQL / bearPoolTotal * pdlReachProb) : 12.0
+
+//=====================================================================
+// V27 ENGINE 7: SIGNAL QUALITY ENGINE V2
+// Normalized quality score (0-100) with letter grading A+/A/B/C/D
+// Quality = Structure + Liquidity + Macro + Session + Volatility
+//=====================================================================
+
+qualityGrade(score) =>
+    score >= 90 ? "A+" : score >= 75 ? "A" : score >= 55 ? "B" : score >= 35 ? "C" : "D"
+
+var float lastSignalQuality   = 0.0
+var string lastSignalType     = ""
+var int    lastSignalBar      = -1
+
+signalQualityBullBOS(score) =>
+    quality = 0.0
+    quality += score >= 70 ? 35.0 : score >= 50 ? 25.0 : score >= 30 ? 15.0 : 5.0
+    quality += htfBullGate ? 25.0 : (htfAlignmentLong >= 1 ? 10.0 : 0.0)
+    quality += macroBull ? 15.0 : 0.0
+    quality += confidenceScore >= 65 ? 15.0 : confidenceScore >= 40 ? 8.0 : 0.0
+    quality += sessionQuality >= 50 ? 10.0 : 0.0
+    int(math.min(math.round(quality), 100))
+
+signalQualityBearBOS(score) =>
+    quality = 0.0
+    quality += score >= 70 ? 35.0 : score >= 50 ? 25.0 : score >= 30 ? 15.0 : 5.0
+    quality += htfBearGate ? 25.0 : (htfAlignmentShort >= 1 ? 10.0 : 0.0)
+    quality += macroBear ? 15.0 : 0.0
+    quality += confidenceScore >= 65 ? 15.0 : confidenceScore >= 40 ? 8.0 : 0.0
+    quality += sessionQuality >= 50 ? 10.0 : 0.0
+    int(math.min(math.round(quality), 100))
+
+signalQualityFVG(isBull, score) =>
+    quality = 0.0
+    quality += not na(score) and score >= 70 ? 35.0 : not na(score) and score >= 50 ? 25.0 : not na(score) and score >= 30 ? 15.0 : 5.0
+    quality += (isBull and htfBullGate) or (not isBull and htfBearGate) ? 25.0 : 0.0
+    quality += (isBull and macroBull) or (not isBull and macroBear) ? 15.0 : 0.0
+    quality += confidenceScore >= 65 ? 15.0 : confidenceScore >= 40 ? 8.0 : 0.0
+    quality += sessionQuality >= 50 ? 10.0 : 0.0
+    int(math.min(math.round(quality), 100))
+
+signalQualityOB(isBull, score) =>
+    quality = 0.0
+    quality += not na(score) and score >= 70 ? 35.0 : not na(score) and score >= 50 ? 25.0 : not na(score) and score >= 30 ? 15.0 : 5.0
+    quality += (isBull and htfBullGate) or (not isBull and htfBearGate) ? 25.0 : 0.0
+    quality += (isBull and macroBull) or (not isBull and macroBear) ? 15.0 : 0.0
+    quality += confidenceScore >= 65 ? 15.0 : confidenceScore >= 40 ? 8.0 : 0.0
+    quality += sessionQuality >= 50 ? 10.0 : 0.0
+    int(math.min(math.round(quality), 100))
+
+if bullBOS
+    lastSignalQuality := signalQualityBullBOS(bullTrendScore)
+    lastSignalType    := "Bull BOS"
+    lastSignalBar     := bar_index
+if bearBOS
+    lastSignalQuality := signalQualityBearBOS(bearTrendScore)
+    lastSignalType    := "Bear BOS"
+    lastSignalBar     := bar_index
+if fvgDetected and not fvgActive[1]
+    lastSignalQuality := signalQualityFVG(fvgWasBullish, fvgScore)
+    lastSignalType    := (fvgWasBullish ? "Bull" : "Bear") + " FVG"
+    lastSignalBar     := bar_index
+if bullOB and not obBullActive[1]
+    lastSignalQuality := signalQualityOB(true, obBullScore)
+    lastSignalType    := "Bull OB"
+    lastSignalBar     := bar_index
+if bearOB and not obBearActive[1]
+    lastSignalQuality := signalQualityOB(false, obBearScore)
+    lastSignalType    := "Bear OB"
+    lastSignalBar     := bar_index
+
+string lastSignalGrade  = qualityGrade(lastSignalQuality)
+
+//=====================================================================
+// SHOULD BUY / SELL - analysis only, no trade execution
+//=====================================================================
+
+bool buyPreFilters = bullTrend and htfBullGate and macroBull and regimeConfHigh and bullRsiDiv and recentBars and sessionQuality >= 30
+shouldBuy = buyPreFilters and (bullBOS or displacementUp)
+
+bool sellPreFilters = bearTrend and htfBearGate and macroBear and regimeConfHigh and bearRsiDiv and recentBars and sessionQuality >= 30
+shouldSell = sellPreFilters and (bearBOS or displacementDown)
+
+// ---- Trade Plan (ATR-based Entry / SL / TP1 / TP2 / RR) ----
+bool   tpIsLong  = bullBiasScore >= bearBiasScore
+float  tpEntry   = close
+float  tpSL      = tpIsLong ? close - adaptiveATR * 1.5 : close + adaptiveATR * 1.5
+float  tp1       = tpIsLong ? close + adaptiveATR * 1.5 : close - adaptiveATR * 1.5
+float  tp2       = tpIsLong ? close + adaptiveATR * 3.0 : close - adaptiveATR * 3.0
+float  tpDist    = math.abs(tpEntry - tpSL)
+float  tpRR1     = tpDist > 0 ? math.abs(tp1 - tpEntry) / tpDist : 0.0
+float  tpRR2     = tpDist > 0 ? math.abs(tp2 - tpEntry) / tpDist : 0.0
+string tpDirStr  = tpIsLong ? "LONG" : "SHORT"
+color  tpCol     = tpIsLong ? #00D084 : #FF4D4D
+string tpEntryStr = str.tostring(tpEntry, "#.##")
+string tpSLStr    = str.tostring(tpSL, "#.##")
+string tp1Str     = str.tostring(tp1, "#.##")
+string tp2Str     = str.tostring(tp2, "#.##")
+string tpRRStr    = "1:" + str.tostring(tpRR1, ".1") + "/1:" + str.tostring(tpRR2, ".1")
+
+//=====================================================================
+// STATISTICAL ENGINES — Evidence-based historical outcome analysis
+// Phase 1: Historical Outcome Database (1000-bar state matching)
+// Phase 2: PDH-First vs PDL-First Analysis
+// Phase 3: Expected Value (WinRate × Reward − LossRate × Risk)
+// Phase 4: Probability Calibration (prediction vs actual outcomes)
+// Phase 5: Trend Persistence Model (BOS/CHOCH continuation)
+// Phase 6: Liquidity Reach Probability (per-target reach rates)
+// Phase 7: Regime Transition Analysis (Markov persistence)
+// Phase 8: Feature Importance (directional contribution per factor)
+// Phase 9: Probability Quality Test (integrity validation)
+// Phase 10: Performance Protection (bounded lookbacks, efficient loops)
+//=====================================================================
+
+HIST_MAX = 4500
+OUTCOME_N = 10
+SIM_THRESH = 55
+
+var int[] hBi = array.new_int(HIST_MAX, -1)
+var int[] hAdx = array.new_int(HIST_MAX, 0)
+var int[] hAtr = array.new_int(HIST_MAX, 0)
+var int[] hHtf = array.new_int(HIST_MAX, 0)
+var int[] hStr = array.new_int(HIST_MAX, 0)
+var int[] hLiq = array.new_int(HIST_MAX, 0)
+var int[] hMr = array.new_int(HIST_MAX, 0)
+var int[] hCor = array.new_int(HIST_MAX, 0)
+var int[] hOut = array.new_int(HIST_MAX, 0)
+var float[] hRet = array.new_float(HIST_MAX, 0.0)
+var float[] hPred = array.new_float(HIST_MAX, 50.0)
+var int[] h1st = array.new_int(HIST_MAX, 0)
+var int[] hBEv = array.new_int(HIST_MAX, 0)
+var float[] hBCont = array.new_float(HIST_MAX, 0.0)
+var int hW = 0
+var int hN = 0
+
+var int rPrev = -1
+var int rTCnt = 0
+var int rRCnt = 0
+var int rDCnt = 0
+var int rTR = 0
+var int rTD = 0
+var int rRT = 0
+var int rRD = 0
+var int rDT = 0
+var int rDR = 0
+
+int rCurr = strongTrend ? 0 : moderateTrend ? 1 : 2
+if barstate.isconfirmed and rPrev >= 0
+    if rPrev == 0
+        rTCnt += 1
+        if rCurr == 1
+            rTR += 1
+        else if rCurr == 2
+            rTD += 1
+    else if rPrev == 1
+        rRCnt += 1
+        if rCurr == 0
+            rRT += 1
+        else if rCurr == 2
+            rRD += 1
+    else if rPrev == 2
+        rDCnt += 1
+        if rCurr == 0
+            rDT += 1
+        else if rCurr == 1
+            rDR += 1
+rPrev := rCurr
+
+if barstate.isconfirmed and bar_index > OUTCOME_N * 3 + 50 and showStatsEngine
+    int cA = adxVal > 25 ? 2 : adxVal > 15 ? 1 : 0
+    int cT = atrPercentile >= 70 ? 2 : atrPercentile >= 30 ? 1 : 0
+    int cH = htfBullGate ? 2 : htfBearGate ? 0 : 1
+    int cS = bullTrend ? 2 : bearTrend ? 0 : 1
+    int cL = 1
+    if not na(poolPdH) and not na(poolPdL)
+        cL := close > poolPdH ? 2 : close < poolPdL ? 0 : 1
+    int cM = mrComposite <= -30 ? 2 : mrComposite >= 30 ? 0 : 1
+    int cC = avgCorrHealth >= 60 ? 2 : avgCorrHealth >= 40 ? 1 : 0
+    array.set(hBi, hW, bar_index)
+    array.set(hAdx, hW, cA)
+    array.set(hAtr, hW, cT)
+    array.set(hHtf, hW, cH)
+    array.set(hStr, hW, cS)
+    array.set(hLiq, hW, cL)
+    array.set(hMr, hW, cM)
+    array.set(hCor, hW, cC)
+    array.set(hPred, hW, bullProb)
+    array.set(hBEv, hW, bullBOS ? 1 : bearBOS ? 2 : 0)
+    array.set(hBCont, hW, -1.0)
+    int oP = (hW - OUTCOME_N + HIST_MAX) % HIST_MAX
+    int oBi = array.get(hBi, oP)
+    if oBi >= 0 and bar_index - oBi >= OUTCOME_N
+        float fc = close - close[OUTCOME_N]
+        float fh = ta.highest(high, OUTCOME_N)
+        float fl = ta.lowest(low, OUTCOME_N)
+        float fr = fh - fl
+        if fr > 0
+            if fc > fr * 0.3
+                array.set(hOut, oP, 1)
+            else if fc < -fr * 0.3
+                array.set(hOut, oP, -1)
+            else
+                array.set(hOut, oP, 0)
+        array.set(hRet, oP, adaptiveATR > 0 ? fc / adaptiveATR : 0.0)
+        int be = array.get(hBEv, oP)
+        if be == 1
+            array.set(hBCont, oP, fc > 0 ? 1.0 : 0.0)
+        else if be == 2
+            array.set(hBCont, oP, fc < 0 ? 1.0 : 0.0)
+        float pdu = poolPdH[OUTCOME_N]
+        float pdl = poolPdL[OUTCOME_N]
+        if not na(pdu) and not na(pdl)
+            int fh_ = 0
+            for j = OUTCOME_N - 1 to 1
+                if fh_ == 0 and high[j] >= pdu
+                    fh_ := 1
+                if fh_ == 0 and low[j] <= pdl
+                    fh_ := 2
+                if fh_ != 0
+                    break
+            array.set(h1st, oP, fh_)
+    hW := (hW + 1) % HIST_MAX
+    if hN < HIST_MAX
+        hN := hN + 1
+
+float oBull = 50.0
+float oBear = 50.0
+float oRange = 0.0
+int oMatch = 0
+int oEvLabel = na
+float oEvVal = 0.0
+int oPdh1stPct = na
+int oPdl1stPct = na
+int oCalPct = 0
+string oCalGrade = "N/A"
+string oCalDetail = ""
+float oRegPer = 50.0
+float oBosCont = 50.0
+float oWr = 50.0
+float oKellyPct = na
+float oAvgW = 0.5
+float oAvgL = 1.0
+float oBosFail = 50.0
+float oFeatStr = na
+float oFeatHtf = na
+float oFeatLiq = na
+float oFeatMr = na
+float oFeatCor = na
+// Probability integrity checked inline
+
+if barstate.islast and hN > OUTCOME_N * 2 and showStatsEngine
+    int ca = adxVal > 25 ? 2 : adxVal > 15 ? 1 : 0
+    int ct = atrPercentile >= 70 ? 2 : atrPercentile >= 30 ? 1 : 0
+    int ch = htfBullGate ? 2 : htfBearGate ? 0 : 1
+    int cs = bullTrend ? 2 : bearTrend ? 0 : 1
+    int cl = 1
+    if not na(poolPdH) and not na(poolPdL)
+        cl := close > poolPdH ? 2 : close < poolPdL ? 0 : 1
+    int cm = mrComposite <= -30 ? 2 : mrComposite >= 30 ? 0 : 1
+    int cc = avgCorrHealth >= 60 ? 2 : avgCorrHealth >= 40 ? 1 : 0
+    int mb = 0
+    int mbr = 0
+    int mr_ = 0
+    int mt = 0
+    int p1 = 0
+    int p2 = 0
+    int pT = 0
+    float sw = 0.0
+    float sl = 0.0
+    int wc = 0
+    int lc = 0
+    int bov = 0
+    int bof = 0
+    int boT = 0
+    int c0t = 0
+    int c0b = 0
+    int c1t = 0
+    int c1b = 0
+    int c2t = 0
+    int c2b = 0
+    int c3t = 0
+    int c3b = 0
+    int c4t = 0
+    int c4b = 0
+    int fSc = 0
+    int fSw = 0
+    int fSt = 0
+    int fHc = 0
+    int fHw = 0
+    int fHt = 0
+    int fLc = 0
+    int fLw = 0
+    int fLt = 0
+    int fMc = 0
+    int fMw = 0
+    int fMt = 0
+    int fCc = 0
+    int fCw = 0
+    int fCt = 0
+    int slm = math.min(hN, HIST_MAX)
+    for i = 0 to slm - 1
+        int sb = array.get(hBi, i)
+        if sb < 0 or bar_index - sb < OUTCOME_N
+            continue
+        int sim = 0
+        sim += array.get(hAdx, i) == ca ? 15 : 0
+        sim += array.get(hAtr, i) == ct ? 15 : 0
+        sim += array.get(hHtf, i) == ch ? 15 : 0
+        sim += array.get(hStr, i) == cs ? 15 : 0
+        sim += array.get(hLiq, i) == cl ? 15 : 0
+        sim += array.get(hMr, i) == cm ? 13 : 0
+        sim += array.get(hCor, i) == cc ? 12 : 0
+        if sim < SIM_THRESH
+            continue
+        int oc = array.get(hOut, i)
+        if oc == 1
+            mb += 1
+            mt += 1
+        else if oc == -1
+            mbr += 1
+            mt += 1
+        else if oc == 0
+            mr_ += 1
+            mt += 1
+        int fh_ = array.get(h1st, i)
+        if fh_ == 1
+            p1 += 1
+            pT += 1
+        else if fh_ == 2
+            p2 += 1
+            pT += 1
+        float fr = array.get(hRet, i)
+        if oc == 1
+            wc += 1
+            sw += math.abs(fr)
+        else if oc == -1
+            lc += 1
+            sl += math.abs(fr)
+        int be = array.get(hBEv, i)
+        if be > 0
+            boT += 1
+            float bC = array.get(hBCont, i)
+            if bC > 0.5
+                bov += 1
+            else if bC >= 0.0
+                bof += 1
+        float pp = array.get(hPred, i)
+        if pp >= 80
+            c4t += 1
+            if oc == 1
+                c4b += 1
+        else if pp >= 60
+            c3t += 1
+            if oc == 1
+                c3b += 1
+        else if pp >= 40
+            c2t += 1
+            if oc == 1
+                c2b += 1
+        else if pp >= 20
+            c1t += 1
+            if oc == 1
+                c1b += 1
+        else
+            c0t += 1
+            if oc == 1
+                c0b += 1
+        int fStr = array.get(hStr, i)
+        if fStr == 2
+            fSt += 1
+            if oc == 1
+                fSc += 1
+            else if oc == -1
+                fSw += 1
+        else if fStr == 0
+            fSt += 1
+            if oc == -1
+                fSc += 1
+            else if oc == 1
+                fSw += 1
+        int fHtf = array.get(hHtf, i)
+        if fHtf == 2
+            fHt += 1
+            if oc == 1
+                fHc += 1
+            else if oc == -1
+                fHw += 1
+        else if fHtf == 0
+            fHt += 1
+            if oc == -1
+                fHc += 1
+            else if oc == 1
+                fHw += 1
+        int fLiq = array.get(hLiq, i)
+        if fLiq == 2
+            fLt += 1
+            if oc == 1
+                fLc += 1
+            else if oc == -1
+                fLw += 1
+        else if fLiq == 0
+            fLt += 1
+            if oc == -1
+                fLc += 1
+            else if oc == 1
+                fLw += 1
+        int fMr = array.get(hMr, i)
+        if fMr == 2
+            fMt += 1
+            if oc == 1
+                fMc += 1
+            else if oc == -1
+                fMw += 1
+        else if fMr == 0
+            fMt += 1
+            if oc == -1
+                fMc += 1
+            else if oc == 1
+                fMw += 1
+        int fCor = array.get(hCor, i)
+        if fCor == 2
+            fCt += 1
+            if oc == 1
+                fCc += 1
+            else if oc == -1
+                fCw += 1
+        else if fCor == 0
+            fCt += 1
+            if oc == -1
+                fCc += 1
+            else if oc == 1
+                fCw += 1
+    if mt >= 3
+        oBull := math.round(mb * 100.0 / mt)
+        oBear := math.round(mbr * 100.0 / mt)
+        oRange := 100.0 - oBull - oBear
+        if oRange < 0
+            oRange := 0.0
+            float ratio = mt > 0 ? mb * 1.0 / mt : 0.5
+            oBull := math.max(oBull - math.abs(oRange) * ratio, 5.0)
+            oBear := 100.0 - oBull
+        oMatch := mt
+    if pT >= 3
+        oPdh1stPct := int(math.round(p1 * 100.0 / pT))
+        oPdl1stPct := 100 - oPdh1stPct
+    if mt >= 5 and (wc > 0 or lc > 0)
+        float wr = mb * 1.0 / mt
+        float lr = mbr * 1.0 / mt
+        float avgW = wc > 0 ? sw / wc : 0.5
+        float avgL = lc > 0 ? sl / lc : 1.0
+        oEvVal := (wr * avgW) - (lr * avgL)
+        oEvLabel := oEvVal > 0.3 ? 1 : oEvVal < -0.3 ? -1 : 0
+        oWr := wr * 100.0
+        // Kelly Criterion: K% = W - ((1-W)/R) where R = avgWin/avgLoss
+        float oKelly = 0.0
+        if avgL > 0 and avgW > 0
+            float rRatio = avgW / avgL
+            oKelly := wr - ((1.0 - wr) / rRatio)
+        oKellyPct := math.max(0.0, math.round(oKelly * 100.0))
+        oAvgW := wc > 0 ? sw / wc : 0.5
+        oAvgL := lc > 0 ? sl / lc : 1.0
+    int calBins = 0
+    float calErr = 0.0
+    if c0t >= 3
+        float a0 = c0b * 100.0 / c0t
+        calErr += math.abs(a0 - 10.0)
+        calBins += 1
+    if c1t >= 3
+        float a1 = c1b * 100.0 / c1t
+        calErr += math.abs(a1 - 30.0)
+        calBins += 1
+    if c2t >= 3
+        float a2 = c2b * 100.0 / c2t
+        calErr += math.abs(a2 - 50.0)
+        calBins += 1
+    if c3t >= 3
+        float a3 = c3b * 100.0 / c3t
+        calErr += math.abs(a3 - 70.0)
+        calBins += 1
+    if c4t >= 3
+        float a4 = c4b * 100.0 / c4t
+        calErr += math.abs(a4 - 90.0)
+        calBins += 1
+    if calBins > 0
+        float ae = calErr / calBins
+        oCalPct := int(math.max(0, 100.0 - ae * 2.0))
+        oCalGrade := oCalPct >= 90 ? "Excellent" : oCalPct >= 75 ? "Good" : oCalPct >= 50 ? "Fair" : "Poor"
+        // Build calibration detail: predicted vs actual for relevant bucket
+        string calDetail = ""
+        if c3t >= 3
+            float a3r = math.round(c3b * 100.0 / c3t)
+            calDetail := "P70>" + str.tostring(int(a3r)) + "%"
+        else if c2t >= 3
+            float a2r = math.round(c2b * 100.0 / c2t)
+            calDetail := "P50>" + str.tostring(int(a2r)) + "%"
+        else if c4t >= 3
+            float a4r = math.round(c4b * 100.0 / c4t)
+            calDetail := "P90>" + str.tostring(int(a4r)) + "%"
+        else if c1t >= 3
+            float a1r = math.round(c1b * 100.0 / c1t)
+            calDetail := "P30>" + str.tostring(int(a1r)) + "%"
+        else if c0t >= 3
+            float a0r = math.round(c0b * 100.0 / c0t)
+            calDetail := "P10>" + str.tostring(int(a0r)) + "%"
+        oCalDetail := calDetail
+    if boT >= 3
+        oBosCont := math.round(bov * 100.0 / boT)
+        oBosFail := 100 - oBosCont
+    if rCurr == 0 and rTCnt > 0
+        oRegPer := math.round((rTCnt - rTR - rTD) * 100.0 / rTCnt)
+    else if rCurr == 1 and rRCnt > 0
+        oRegPer := math.round((rRCnt - rRT - rRD) * 100.0 / rRCnt)
+    else if rCurr == 2 and rDCnt > 0
+        oRegPer := math.round((rDCnt - rDT - rDR) * 100.0 / rDCnt)
+    if fSt > 0
+        oFeatStr := (fSc - fSw) * 100.0 / fSt
+    if fHt > 0
+        oFeatHtf := (fHc - fHw) * 100.0 / fHt
+    if fLt > 0
+        oFeatLiq := (fLc - fLw) * 100.0 / fLt
+    if fMt > 0
+        oFeatMr := (fMc - fMw) * 100.0 / fMt
+    if fCt > 0
+        oFeatCor := (fCc - fCw) * 100.0 / fCt
+
+// Override primary probabilities with historical outcomes when available
+if barstate.islast and showStatsEngine and oMatch >= 3
+    bullProb := oBull
+    bearProb := oBear
+    rangeProb := 0.0
+    if bullProb < 5.0 and bearProb < 5.0
+        bullProb := 50.0
+        bearProb := 50.0
+    if bullProb > 95.0
+        bullProb := 95.0
+        bearProb := math.max(bearProb, 5.0)
+        rangeProb := 100.0 - bullProb - bearProb
+    if bearProb > 95.0
+        bearProb := 95.0
+        bullProb := math.max(bullProb, 5.0)
+        rangeProb := 100.0 - bullProb - bearProb
+    if bullProb + bearProb < 100.0
+        rangeProb := 100.0 - bullProb - bearProb
+
+//=====================================================================
+// FORECAST ENGINE (Module 12)
+// Unified forward projection combining:
+//   Historical Analog   (30%)
+//   Trend Persistence   (25%)
+//   Liquidity Dest.     (25%)
+//   Regime Persistence  (20%)
+//=====================================================================
+
+float fBull = 50.0
+float fBear = 50.0
+float fRng = 0.0
+
+// 1) Historical Analog — best available source
+if showStatsEngine and oMatch >= 3
+    fBull := oBull
+    fBear := oBear
+    fRng := 100.0 - fBull - fBear
+    if fRng < 0
+        fRng := 0.0
+else if histBullRate != 50.0
+    fBull := histBullRate
+    fBear := histBearRate
+    fRng := 100.0 - fBull - fBear
+    if fRng < 0
+        fRng := 0.0
+
+if barstate.islast
+    // 2) Trend Persistence factor (±8% adjustment, ±12% after displacement)
+    float trendFactor = 0.0
+    if showStatsEngine and oMatch >= 3 and (bullTrend or bearTrend)
+        // Boost trend weight when recent displacement confirms momentum
+        bool recentDisp = (displacementUp or displacementDown) or (displacementUp[1] or displacementDown[1])
+        float trendMult = recentDisp ? 0.24 : 0.16
+        if bullTrend
+            trendFactor := (oBosCont - 50.0) * trendMult
+        else
+            trendFactor := -(oBosCont - 50.0) * trendMult
+
+    // 3) Liquidity Destination factor (±6% adjustment)
+    float liqFactor = 0.0
+    if liqMaxScore > 0
+        bool destBull = liqDestLabel == "PDH" or liqDestLabel == "PWH" or liqDestLabel == "PMH" or liqDestLabel == "EQH"
+        if destBull and bullTrend
+            liqFactor := (liqReachProb - 50.0) * 0.12
+        else if not destBull and bearTrend
+            liqFactor := (liqReachProb - 50.0) * 0.12
+
+    // 4) Regime Persistence factor (±5% adjustment)
+    float regFactor = 0.0
+    if showStatsEngine and oRegPer >= 40
+        if bullTrend
+            regFactor := (oRegPer - 50.0) * 0.10
+        else if bearTrend
+            regFactor := -(oRegPer - 50.0) * 0.10
+
+    float fAdj = trendFactor + liqFactor + regFactor
+    fBull := math.min(math.max(fBull + fAdj, 5.0), 95.0)
+    fBear := 100.0 - fBull - fRng
+    if fBear < 0
+        fBear := 0.0
+        fRng := 100.0 - fBull - fBear
+        if fRng < 0
+            fRng := 0.0
+            float r = fBull / (fBull + fBear + 1)
+            fBull := math.max(100.0 * r, 5.0)
+            fBear := 100.0 - fBull
+
+    // Write forecast engine output to display probabilities
+    bullProb := fBull
+    bearProb := fBear
+    rangeProb := fRng
+
+//=====================================================================
+// WALK-FORWARD VALIDATION ENGINE (WFV)
+//
+// Splits the 4500-bar history buffer into rolling windows:
+//   In-Sample  (IS) : oldest 75% of hN filled records
+//   Out-of-Sample (OOS): newest 25% of hN filled records
+//
+// Within each window we run the same similarity matching used by the
+// stats engine to produce independent IS and OOS win-rates, expected
+// values, and Brier scores.  Degradation = IS_WR - OOS_WR (positive
+// value means overfit; negative means OOS generalises better).
+//
+// All computed on barstate.islast so it runs once per chart update.
+//=====================================================================
+
+float wfvIS_WR    = na
+float wfvOOS_WR   = na
+float wfvIS_EV    = na
+float wfvOOS_EV   = na
+float wfvDegr     = na   // IS_WR - OOS_WR  (overfit indicator)
+string wfvGrade   = "N/A"
+
+if barstate.islast and hN > OUTCOME_N * 4 and showStatsEngine
+    int ca = adxVal > 25 ? 2 : adxVal > 15 ? 1 : 0
+    int ct = atrPercentile >= 70 ? 2 : atrPercentile >= 30 ? 1 : 0
+    int ch = htfBullGate ? 2 : htfBearGate ? 0 : 1
+    int cs = bullTrend ? 2 : bearTrend ? 0 : 1
+    int cl = 1
+    if not na(poolPdH) and not na(poolPdL)
+        cl := close > poolPdH ? 2 : close < poolPdL ? 0 : 1
+    int cm = mrComposite <= -30 ? 2 : mrComposite >= 30 ? 0 : 1
+    int cc = avgCorrHealth >= 60 ? 2 : avgCorrHealth >= 40 ? 1 : 0
+
+    int totalRecs = math.min(hN, HIST_MAX)
+    // IS boundary: oldest 75%; OOS: newest 25%
+    // hW points to next-write slot, so records are in order of age
+    // Oldest record index in circular buffer = hW (oldest unwritten → next to be overwritten)
+    int splitPoint = int(totalRecs * 75 / 100)  // number of IS records
+
+    // IS pass
+    int is_mb = 0; int is_mbr = 0; int is_mt = 0
+    float is_sw = 0.0; float is_sl = 0.0; int is_wc = 0; int is_lc = 0
+    // OOS pass
+    int oos_mb = 0; int oos_mbr = 0; int oos_mt = 0
+    float oos_sw = 0.0; float oos_sl = 0.0; int oos_wc = 0; int oos_lc = 0
+
+    for i = 0 to totalRecs - 1
+        int sb = array.get(hBi, i)
+        if sb < 0 or bar_index - sb < OUTCOME_N
+            continue
+        int sim = 0
+        sim += array.get(hAdx, i) == ca ? 15 : 0
+        sim += array.get(hAtr, i) == ct ? 15 : 0
+        sim += array.get(hHtf, i) == ch ? 15 : 0
+        sim += array.get(hStr, i) == cs ? 15 : 0
+        sim += array.get(hLiq, i) == cl ? 15 : 0
+        sim += array.get(hMr,  i) == cm ? 13 : 0
+        sim += array.get(hCor, i) == cc ? 12 : 0
+        if sim < SIM_THRESH
+            continue
+        int oc = array.get(hOut, i)
+        float fr = array.get(hRet, i)
+        // Age-rank: distance from hW in the circular buffer
+        int age = (i - hW + HIST_MAX) % HIST_MAX   // 0 = oldest, HIST_MAX-1 = newest
+        bool isIS = age < splitPoint
+        if isIS
+            if oc == 1
+                is_mb += 1; is_mt += 1; is_wc += 1; is_sw += math.abs(fr)
+            else if oc == -1
+                is_mbr += 1; is_mt += 1; is_lc += 1; is_sl += math.abs(fr)
+            else if oc == 0
+                is_mt += 1
+        else
+            if oc == 1
+                oos_mb += 1; oos_mt += 1; oos_wc += 1; oos_sw += math.abs(fr)
+            else if oc == -1
+                oos_mbr += 1; oos_mt += 1; oos_lc += 1; oos_sl += math.abs(fr)
+            else if oc == 0
+                oos_mt += 1
+
+    if is_mt >= 5
+        float isWR = is_mb * 1.0 / is_mt
+        float isLR = is_mbr * 1.0 / is_mt
+        float isAvgW = is_wc > 0 ? is_sw / is_wc : 0.5
+        float isAvgL = is_lc > 0 ? is_sl / is_lc : 1.0
+        wfvIS_WR := isWR * 100.0
+        wfvIS_EV := (isWR * isAvgW) - (isLR * isAvgL)
+
+    if oos_mt >= 5
+        float oosWR = oos_mb * 1.0 / oos_mt
+        float oosLR = oos_mbr * 1.0 / oos_mt
+        float oosAvgW = oos_wc > 0 ? oos_sw / oos_wc : 0.5
+        float oosAvgL = oos_lc > 0 ? oos_sl / oos_lc : 1.0
+        wfvOOS_WR := oosWR * 100.0
+        wfvOOS_EV := (oosWR * oosAvgW) - (oosLR * oosAvgL)
+
+    if not na(wfvIS_WR) and not na(wfvOOS_WR)
+        wfvDegr := wfvIS_WR - wfvOOS_WR
+        // Grade: < 5pp degradation = Excellent, < 10 = Good, < 20 = Fair, >= 20 = Poor
+        wfvGrade := math.abs(wfvDegr) < 5.0 ? "Excellent" : math.abs(wfvDegr) < 10.0 ? "Good" : math.abs(wfvDegr) < 20.0 ? "Fair" : "Poor"
+
+//=====================================================================
+// PROBABILITY CALIBRATION — Brier Score
+//
+// Brier Score = mean( (p_bull - outcome)^2 ) over matched records
+//   outcome = 1 if bull, 0 otherwise
+//   Lower is better; perfect = 0.0, random = 0.25
+//
+// We also track the existing per-bucket calibration (oCalPct / oCalGrade)
+// which continues to provide the directional calibration detail.
+// The Brier score provides a single scalar goodness-of-fit metric.
+//=====================================================================
+
+float oCalBrier     = na   // Brier Score (0 = perfect, 0.25 = random)
+string oCalBrierStr = "N/A"
+
+if barstate.islast and hN > OUTCOME_N * 2 and showStatsEngine
+    float brierSum = 0.0
+    int   brierN   = 0
+    int   slm2 = math.min(hN, HIST_MAX)
+    for i = 0 to slm2 - 1
+        int sb = array.get(hBi, i)
+        if sb < 0 or bar_index - sb < OUTCOME_N
+            continue
+        int oc  = array.get(hOut, i)
+        float pp = array.get(hPred, i) / 100.0   // predicted bull probability [0,1]
+        float actual = oc == 1 ? 1.0 : 0.0        // bull=1, bear/range=0
+        brierSum += math.pow(pp - actual, 2)
+        brierN   += 1
+
+    if brierN >= 10
+        oCalBrier := brierSum / brierN
+        // Label: < 0.10 = Excellent, < 0.17 = Good, < 0.22 = Fair, >= 0.22 = Poor
+        oCalBrierStr := oCalBrier < 0.10 ? "Excellent" : oCalBrier < 0.17 ? "Good" : oCalBrier < 0.22 ? "Fair" : "Poor"
+
+//=====================================================================
+// FORMAL PERFORMANCE STATISTICS
+//
+// Computed from the matched historical records (same as stats engine):
+//
+//   Sharpe Ratio    = mean(R_return) / stdev(R_return) × √N_bars_per_year
+//                     where R_return is the ATR-normalised forward return
+//                     (each matched record contributes one trade return)
+//                     Annualisation: assume 252 trading days / OUTCOME_N bars
+//
+//   Expectancy      = (WR × avgWin) - (LR × avgLoss) in R-multiples
+//                     (already computed as oEvVal above — surfaced here for
+//                     the dedicated display row)
+//
+//   Max Drawdown    = maximum peak-to-trough decline in the running equity
+//                     curve built from sequential matched-record returns
+//
+//   Profit Factor   = gross_wins / gross_losses  (ratio, not percentage)
+//=====================================================================
+
+float perfSharpe    = na
+float perfExpect    = na    // identical to oEvVal when oMatch >= 5
+float perfMaxDD     = na    // max drawdown in R-multiples
+float perfPF        = na    // profit factor
+
+if barstate.islast and hN > OUTCOME_N * 2 and showStatsEngine
+    // Collect returns from all matched records in time order
+    // We need to iterate in chronological order; hBi stores bar_index.
+    // We build a simple equity curve by iterating hW→hW (circular, oldest first).
+    float retSum  = 0.0
+    float ret2Sum = 0.0
+    int   retN    = 0
+    float grossW  = 0.0
+    float grossL  = 0.0
+    float equity  = 0.0
+    float peak    = 0.0
+    float maxDD   = 0.0
+
+    // Current-state categories for similarity matching (same as WFV above)
+    int pca = adxVal > 25 ? 2 : adxVal > 15 ? 1 : 0
+    int pct = atrPercentile >= 70 ? 2 : atrPercentile >= 30 ? 1 : 0
+    int pch = htfBullGate ? 2 : htfBearGate ? 0 : 1
+    int pcs = bullTrend ? 2 : bearTrend ? 0 : 1
+    int pcl = 1
+    if not na(poolPdH) and not na(poolPdL)
+        pcl := close > poolPdH ? 2 : close < poolPdL ? 0 : 1
+    int pcm = mrComposite <= -30 ? 2 : mrComposite >= 30 ? 0 : 1
+    int pcc = avgCorrHealth >= 60 ? 2 : avgCorrHealth >= 40 ? 1 : 0
+
+    int slm3 = math.min(hN, HIST_MAX)
+    // Iterate oldest to newest (hW is next-write → oldest is hW itself)
+    for k = 0 to slm3 - 1
+        int i = (hW + k) % HIST_MAX
+        int sb = array.get(hBi, i)
+        if sb < 0 or bar_index - sb < OUTCOME_N
+            continue
+        int sim = 0
+        sim += array.get(hAdx, i) == pca ? 15 : 0
+        sim += array.get(hAtr, i) == pct ? 15 : 0
+        sim += array.get(hHtf, i) == pch ? 15 : 0
+        sim += array.get(hStr, i) == pcs ? 15 : 0
+        sim += array.get(hLiq, i) == pcl ? 15 : 0
+        sim += array.get(hMr,  i) == pcm ? 13 : 0
+        sim += array.get(hCor, i) == pcc ? 12 : 0
+        if sim < SIM_THRESH
+            continue
+        int oc   = array.get(hOut, i)
+        float fr = array.get(hRet, i)
+        // Sign the return: bull outcome → positive, bear → negative, range → 0
+        float signedR = oc == 1 ? math.abs(fr) : oc == -1 ? -math.abs(fr) : 0.0
+        retSum  += signedR
+        ret2Sum += signedR * signedR
+        retN    += 1
+        if signedR > 0
+            grossW += signedR
+        else if signedR < 0
+            grossL += math.abs(signedR)
+        // Equity curve for max drawdown
+        equity += signedR
+        if equity > peak
+            peak := equity
+        float dd = peak - equity
+        if dd > maxDD
+            maxDD := dd
+
+    if retN >= 10
+        float retMean = retSum / retN
+        float retVar  = ret2Sum / retN - retMean * retMean
+        float retStd  = retVar > 0 ? math.sqrt(retVar) : 0.0
+        // Annualise: each record covers OUTCOME_N bars; trades per year = 252 / OUTCOME_N
+        float annFactor = math.sqrt(252.0 / OUTCOME_N)
+        perfSharpe := retStd > 0 ? (retMean / retStd) * annFactor : na
+        perfExpect := oEvVal   // R-multiple expectancy already computed
+        perfMaxDD  := maxDD
+        perfPF     := grossL > 0 ? grossW / grossL : na
+
+//=====================================================================
+// V27 ENGINE 8: INSTITUTIONAL DASHBOARD — Titled metrics + breakdown
+// Row 0:  Conf | Bull/Bear% | Target
+// Row 1:  PDH→% / PDL→% / Hist PDH / Hist PDL
+// Row 2:  PDH / PDL / PWH / PWL levels
+// Row 3:  WHY breakdown — Struct | Liq | Macro | MR
+// Row 4:  DXY | EUR | XAG | 10Y
+// Color: White = info, Green = bull, Red = bear, Gray = neutral
+//=====================================================================
+
+color cInfo   = color.new(#F1F5F9, 0)
+color cGray   = color.new(#A0A0A0, 0)
+color cBgBox  = color.new(#0F172A, 92)
+
+// Map level abbreviations to readable display names
+string liqShortTarget = liqDestLabel == "PDH" ? "PrevDayHi" : liqDestLabel == "PDL" ? "PrevDayLo" : liqDestLabel == "PWH" ? "PrevWeekHi" : liqDestLabel == "PWL" ? "PrevWeekLo" : liqDestLabel == "PMH" ? "PrevMoHi" : liqDestLabel == "PML" ? "PrevMoLo" : liqDestLabel == "EQH" ? "EqualHi" : liqDestLabel == "EQL" ? "EqualLo" : liqDestLabel
+
+// Directional labels for breakdown row
+string structDir = probTrendBull > probTrendBear ? "Bull" : "Bear"
+string liqDir    = probLiqBull > probLiqBear     ? "Bull" : "Bear"
+string macroDir  = macroStrengthScore > 0         ? "Bull" : (macroStrengthScore < 0 ? "Bear" : "—")
+color structCol = structDir == "Bull" ? #00D084 : #FF4D4D
+color liqCol    = liqDir    == "Bull" ? #00D084 : #FF4D4D
+color macroCol  = macroDir  == "Bull" ? #00D084 : (macroDir == "Bear" ? #FF4D4D : cGray)
+color mrCol   = mrComposite >= 30  ? #FF4D4D : (mrComposite <= -30 ? #00D084 : cGray)
+string mrStr  = mrComposite >= 60  ? "Overext" : (mrComposite >= 30 ? "Extended" : (mrComposite <= -60 ? "Overext" : (mrComposite <= -30 ? "Extended" : "Normal")))
+float mrRevProb = math.abs(mrComposite) >= 60 ? 85.0 : math.abs(mrComposite) >= 30 ? 65.0 : 35.0
+
+// Regime label with Volatile (M9-A)
+string regLabel = strongTrend ? (volRegime > 70 ? "Volatile" : "Trending") : moderateTrend ? (volRegime > 70 ? "Volatile" : "Ranging") : "Dead"
+
+// Transition probabilities (M9-B) — display from regime counters
+string regTransStr = "—"
+if showStatsEngine and rTCnt + rRCnt + rDCnt > 10
+    float t2r = rTCnt > 0 ? rTR * 100.0 / rTCnt : 0.0
+    float r2t = rRCnt > 0 ? rRT * 100.0 / rRCnt : 0.0
+    if rCurr == 0
+        regTransStr := "T→R " + str.tostring(int(t2r)) + "%"
+    else if rCurr == 1
+        regTransStr := "R→T " + str.tostring(int(r2t)) + "%"
+    else if rCurr == 2 and rDCnt > 0
+        float d2t = rDCnt > 0 ? rDT * 100.0 / rDCnt : 0.0
+        float d2r = rDCnt > 0 ? rDR * 100.0 / rDCnt : 0.0
+        regTransStr := "D→T " + str.tostring(int(d2t)) + "% D→R " + str.tostring(int(d2r)) + "%"
+
+// Correlation directional magnitude — Strong/Moderate/Weak per asset
+string dxyMag = "—"
+string eurMag = "—"
+string yldMag = "—"
+string xagMag = "—"
+if dxyValid and dxyEMAFast > 0
+    float dxyDev = dxyBull or dxyBear ? math.abs(dxyClose - dxyEMAFast) / dxyEMAFast * 100.0 : 0.0
+    dxyMag := dxyDev > 1.5 ? "Strong" : dxyDev > 0.5 ? "Moderate" : "Weak"
+if eurusdValid and eurusdEMAFast > 0
+    float eurDev = eurusdBull or eurusdBear ? math.abs(eurusdClose - eurusdEMAFast) / eurusdEMAFast * 100.0 : 0.0
+    eurMag := eurDev > 1.0 ? "Strong" : eurDev > 0.3 ? "Moderate" : "Weak"
+if yieldValid and yieldEMAFast > 0
+    float yldDev = yieldRising or yieldFalling ? math.abs(yieldClose - yieldEMAFast) / yieldEMAFast * 100.0 : 0.0
+    yldMag := yldDev > 5.0 ? "Strong" : yldDev > 1.5 ? "Moderate" : "Weak"
+if silverValid and silverEMA > 0
+    float xagDev = silverClose > silverEMA or silverClose < silverEMA ? math.abs(silverClose - silverEMA) / silverEMA * 100.0 : 0.0
+    xagMag := xagDev > 2.0 ? "Strong" : xagDev > 0.7 ? "Moderate" : "Weak"
+
+// Correlation health label (M10-A)
+string corrHealthLabel = avgCorrHealth >= 60 ? "Supportive" : avgCorrHealth >= 40 ? "Neutral" : "Contradictory"
+
+// Win rate display (M11-A)
+string wrStr = "—"
+float wrVal = 50.0
+if oWr != 50.0
+    wrVal := oWr
+    wrStr := str.tostring(int(wrVal)) + "%"
+
+// Compact macro
+color macro1Color = dxyValid ? (dxyBear ? cBull : dxyBull ? cBear : cGray) : cGray
+color macro2Color = yieldValid ? (yieldFalling ? cBull : yieldRising ? cBear : cGray) : cGray
+color macro3Color = eurusdValid ? (eurusdBull ? cBull : eurusdBear ? cBear : cGray) : cGray
+color macro4Color = silverValid ? (not na(silverClose) and silverClose > silverEMA ? cBull : cBear) : cGray
+// Correlation: impact arrows on XAUUSD — ▲▲/▲ (bullish), ▼▼/▼ (bearish), ≈ (neutral)
+// Strong → double arrow, Moderate/Weak → single arrow
+string _dxyArrow = dxyValid ? (dxyMag == "Strong" ? (dxyBear ? "▲▲" : "▼▼") : dxyMag == "—" ? "≈" : (dxyBear ? "▲" : "▼")) : "—"
+string _yldArrow = yieldValid ? (yldMag == "Strong" ? (yieldFalling ? "▲▲" : "▼▼") : yldMag == "—" ? "≈" : (yieldFalling ? "▲" : "▼")) : "—"
+string _eurArrow = eurusdValid ? (eurMag == "Strong" ? (eurusdBull ? "▲▲" : "▼▼") : eurMag == "—" ? "≈" : (eurusdBull ? "▲" : "▼")) : "—"
+string _xagArrow = silverValid ? (xagMag == "Strong" ? (silverClose > silverEMA ? "▲▲" : "▼▼") : xagMag == "—" ? "≈" : (silverClose > silverEMA ? "▲" : "▼")) : "—"
+string dxyC = dxyValid ? "DXY" + _dxyArrow : "—"
+string yldC = yieldValid ? "10Y" + _yldArrow : "—"
+string eurC = eurusdValid ? "EUR" + _eurArrow : "—"
+string slvC = silverValid ? "XAG" + _xagArrow : "—"
+
+color dashConfColor = confidenceScore >= 60 ? cBull : confidenceScore >= 40 ? cGray : cBear
+// (sesCol removed — unused)
+
+var table cmdHdr = na
+
+if showDashboard and barstate.islast
+    string pdhStr = not na(poolPdH) ? "─" + str.tostring(poolPdH, "#.##") : "—"
+    string pdlStr = not na(poolPdL) ? "─" + str.tostring(poolPdL, "#.##") : "—"
+    string pwhStr = not na(poolPwH) ? "─" + str.tostring(poolPwH, "#.##") : "—"
+    string pwlStr = not na(poolPwL) ? "─" + str.tostring(poolPwL, "#.##") : "—"
+
+    // Distance and reachability for target row
+    float targetPrice = na
+    if liqDestLabel == "PDH" and not na(poolPdH)
+        targetPrice := poolPdH
+    else if liqDestLabel == "PDL" and not na(poolPdL)
+        targetPrice := poolPdL
+    else if liqDestLabel == "PWH" and not na(poolPwH)
+        targetPrice := poolPwH
+    else if liqDestLabel == "PWL" and not na(poolPwL)
+        targetPrice := poolPwL
+    string distStr = "—"
+    string reachStr = ""
+    if not na(targetPrice) and not na(close) and not na(adaptiveATR)
+        float distPts = math.abs(targetPrice - close)
+        distStr := str.tostring(distPts, "#.#")
+        float distRat = distPts / adaptiveATR
+        reachStr := distRat <= 0.5 ? " High" : distRat <= 1.0 ? " Med" : " Low"
+
+    int tblRows = showAdvancedMode ? 15 : 6
+    cmdHdr := table.new(position.top_center, 4, tblRows, bgcolor=cBgBox, border_width=0, frame_width=0)
+
+    // ROW 0 — Column Headers
+    color hdrCol = color.new(#A0A0A0, 40)
+    table.cell(cmdHdr, 0, 0, "BULLISH ↗", text_color=#A0A0A0, bgcolor=hdrCol, text_size=size.small, width=18)
+    table.cell(cmdHdr, 1, 0, "BEARISH ↘", text_color=#A0A0A0, bgcolor=hdrCol, text_size=size.small, width=16)
+    table.cell(cmdHdr, 2, 0, "NEUTRAL →", text_color=#A0A0A0, bgcolor=hdrCol, text_size=size.small, width=14)
+    table.cell(cmdHdr, 3, 0, "TARGET", text_color=#A0A0A0, bgcolor=hdrCol, text_size=size.small, width=16)
+
+    // ROW 1 — Signal: Bias %, Confidence, Regime, Nearest Target + Distance
+    // Highlight primary bias cell with subtle background
+    bool priBull = bullProb >= bearProb and bullProb >= rangeProb
+    bool priBear = bearProb >= bullProb and bearProb >= rangeProb
+    bool priRange = rangeProb >= bullProb and rangeProb >= bearProb
+    color priBgBull = priBull ? color.new(#00D084, 82) : na
+    color priBgBear = priBear ? color.new(#FF4D4D, 82) : na
+    table.cell(cmdHdr, 0, 1, "Bullish " + str.tostring(bullProb, "0") + "%", text_color=#00D084, bgcolor=priBgBull, text_size=size.small, width=18)
+    table.cell(cmdHdr, 1, 1, "Bearish " + str.tostring(bearProb, "0") + "%", text_color=#FF4D4D, bgcolor=priBgBear, text_size=size.small, width=16)
+    table.cell(cmdHdr, 2, 1, "Conf " + str.tostring(confidenceScore, "0") + " " + regLabel, text_color=dashConfColor, text_size=size.small, width=14)
+    table.cell(cmdHdr, 3, 1, "→" + liqShortTarget + " +" + distStr + "pt" + reachStr, text_color=cForecast, text_size=size.small, width=16)
+
+    // ROW 2 — Probability: Up/Down/Range%, Reach Probability for Target
+    string reachProbStr = "—"
+    if liqDestLabel == "PDH" and not na(pdhReachProb)
+        reachProbStr := "Reach " + str.tostring(int(pdhReachProb)) + "%"
+    else if liqDestLabel == "PDL" and not na(pdlReachProb)
+        reachProbStr := "Reach " + str.tostring(int(pdlReachProb)) + "%"
+    else if showStatsEngine and oMatch >= 3
+        reachProbStr := str.tostring(oMatch, "0") + "m"
+    table.cell(cmdHdr, 0, 2, "Up " + str.tostring(bullProb, "0") + "%", text_color=cBull, text_size=size.small, width=16)
+    table.cell(cmdHdr, 1, 2, "Down " + str.tostring(bearProb, "0") + "%", text_color=cBear, text_size=size.small, width=16)
+    table.cell(cmdHdr, 2, 2, "Range " + str.tostring(rangeProb, "0") + "%", text_color=cGray, text_size=size.small, width=14)
+    table.cell(cmdHdr, 3, 2, reachProbStr, text_color=cForecast, text_size=size.small, width=14)
+
+    // ROW 3 — Performance: WinRate, Expected Value, Kelly %, Avg R:R
+    if showStatsEngine
+        string evStr = "—"
+        color evCol = cGray
+        if na(oEvLabel)
+            evStr := "—"
+        else
+            evCol := oEvLabel > 0 ? cBull : oEvLabel < 0 ? cBear : cGray
+            evStr := oEvLabel > 0 ? "Exp+" + str.tostring(oEvVal, "#.#") : "Exp" + str.tostring(oEvVal, "#.#")
+        color wrCol = wrVal >= 60 ? cBull : wrVal <= 40 ? cBear : cGray
+        string kKellyPctStr = na(oKellyPct) ? "—" : oKellyPct < 1.0 and oKellyPct > 0 ? "<1%" : str.tostring(int(oKellyPct)) + "%"
+        string kellyStr = na(oKellyPct) ? "Kelly —" : "Kelly " + kKellyPctStr
+        color kellyCol = na(oKellyPct) ? cGray : oKellyPct > 0 ? cBull : cGray
+        string rrStr = oAvgW != 0.5 or oAvgL != 1.0 ? str.tostring(oAvgW, "#.#") + ":" + str.tostring(oAvgL, "#.#") : "—"
+        table.cell(cmdHdr, 0, 3, "WinRate " + wrStr, text_color=wrCol, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 3, kellyStr, text_color=kellyCol, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 3, evStr, text_color=evCol, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 3, "RR " + rrStr, text_color=cGray, text_size=size.small, width=14)
+    else
+        table.cell(cmdHdr, 0, 3, "WinRate —", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 3, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 3, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 3, "—", text_color=cGray, text_size=size.small, width=14)
+
+    // ROW 4 — Trade Plan: Entry, StopLoss, TP1, TP2
+    if showTradePlan
+        table.cell(cmdHdr, 0, 4, "Entry " + tpEntryStr, text_color=cInfo, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 4, "Stop " + tpSLStr, text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 4, "T1 " + tp1Str, text_color=tpCol, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 4, "T2 " + tp2Str, text_color=tpCol, text_size=size.small, width=14)
+    else
+        table.cell(cmdHdr, 0, 4, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 4, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 4, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 4, "—", text_color=cGray, text_size=size.small, width=14)
+
+    // ROW 5 — Trade Direction + RR
+    if showTradePlan
+        table.cell(cmdHdr, 0, 5, tpDirStr, text_color=tpCol, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 5, "RR " + tpRRStr, text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 5, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 5, "—", text_color=cGray, text_size=size.small, width=14)
+    else
+        table.cell(cmdHdr, 0, 5, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 5, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 5, "—", text_color=cGray, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 5, "—", text_color=cGray, text_size=size.small, width=14)
+
+    // === ADVANCED DASHBOARD ROWS ===
+    if showAdvancedMode
+
+        // ROW 6 — Calibration: Grade, Pred vs Actual, Score, Source
+        if showStatsEngine
+            color calCol = oCalPct >= 75 ? #00D084 : oCalPct >= 50 ? #A0A0A0 : #FF4D4D
+            table.cell(cmdHdr, 0, 6, oCalGrade, text_color=calCol, text_size=size.small, width=16)
+            table.cell(cmdHdr, 1, 6, oCalDetail != "" ? oCalDetail : "No Data", text_color=calCol, text_size=size.small, width=16)
+            table.cell(cmdHdr, 2, 6, "Score=" + str.tostring(oCalPct, "0") + "%", text_color=calCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 6, "Historical", text_color=cForecast, text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 6, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 6, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 6, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 6, "—", text_color=cGray, text_size=size.small, width=14)
+
+        // ROW 7 — Liquidity: PDH%/PDL% odds, 1st-hit rate
+        table.cell(cmdHdr, 0, 7, "PDH " + str.tostring(pdhReachProb, "0") + "%", text_color=#FF4D4D, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 7, "PDL " + str.tostring(pdlReachProb, "0") + "%", text_color=#00D084, text_size=size.small, width=14)
+        if showStatsEngine and oMatch >= 3 and not na(oPdh1stPct)
+            table.cell(cmdHdr, 2, 7, "FirstHi " + str.tostring(oPdh1stPct, "0") + "%", text_color=cForecast, text_size=size.small, width=12)
+            table.cell(cmdHdr, 3, 7, "FirstLo " + str.tostring(oPdl1stPct, "0") + "%", text_color=cGray, text_size=size.small, width=12)
+        else if showStatsEngine and hN > 20
+            table.cell(cmdHdr, 2, 7, "HistHi " + str.tostring(histPdhReach, "0") + "%", text_color=cForecast, text_size=size.small, width=12)
+            table.cell(cmdHdr, 3, 7, "HistLo " + str.tostring(histPdlReach, "0") + "%", text_color=cGray, text_size=size.small, width=12)
+        else
+            table.cell(cmdHdr, 2, 7, "—", text_color=cGray, text_size=size.small, width=12)
+            table.cell(cmdHdr, 3, 7, "—", text_color=cGray, text_size=size.small, width=12)
+
+        // ROW 8 — Key Levels: Previous Day/Week High/Low
+        table.cell(cmdHdr, 0, 8, "PrevDayHi" + pdhStr, text_color=#FF4D4D, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 8, "PrevDayLo" + pdlStr, text_color=#00D084, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 8, "WeekHigh" + pwhStr, text_color=#FF8C00, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 8, "WeekLow" + pwlStr, text_color=#00C2FF, text_size=size.small, width=14)
+
+        // ROW 9 — Structure/Regime: BOS Continuation%, Failure%, Regime, Transition%
+        if showStatsEngine
+            color bosCol = oBosCont >= 60 ? #00D084 : oBosCont <= 40 ? #FF4D4D : cGray
+            color failCol = oBosFail >= 60 ? #FF4D4D : oBosFail <= 40 ? #00D084 : cGray
+            table.cell(cmdHdr, 0, 9, "Continue " + str.tostring(oBosCont, "0") + "%", text_color=bosCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 9, "Failure " + str.tostring(oBosFail, "0") + "%", text_color=failCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 9, regLabel, text_color=cForecast, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 9, regTransStr, text_color=cGray, text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 9, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 9, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 9, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 9, "—", text_color=cGray, text_size=size.small, width=14)
+
+        // ROW 10 — Correlation: Impact on XAUUSD (▲▲/▲/▼▼/▼/≈)
+        table.cell(cmdHdr, 0, 10, dxyC, text_color=macro1Color, text_size=size.small, width=14)
+        table.cell(cmdHdr, 1, 10, eurC, text_color=macro3Color, text_size=size.small, width=14)
+        table.cell(cmdHdr, 2, 10, slvC, text_color=macro4Color, text_size=size.small, width=14)
+        table.cell(cmdHdr, 3, 10, yldC, text_color=macro2Color, text_size=size.small, width=14)
+
+        // ROW 11 — Factor Weights: Struct / Liq / HiTF / MeanRv + Correl
+        if showStatsEngine
+            string faS = na(oFeatStr) ? "Struct—" : "Struct" + (oFeatStr > 0 ? "+" : "") + str.tostring(int(oFeatStr))
+            string faL = na(oFeatLiq) ? "Liquid—" : "Liquid" + (oFeatLiq > 0 ? "+" : "") + str.tostring(int(oFeatLiq))
+            string faH = na(oFeatHtf) ? "HiTF—" : "HiTF" + (oFeatHtf > 0 ? "+" : "") + str.tostring(int(oFeatHtf))
+            string faR = na(oFeatMr) ? "MeanRv—" : "MeanRv" + (oFeatMr > 0 ? "+" : "") + str.tostring(int(oFeatMr))
+            string faC = na(oFeatCor) ? "Correl—" : "Correl" + (oFeatCor > 0 ? "+" : "") + str.tostring(int(oFeatCor))
+            color faCol = na(oFeatCor) ? cGray : oFeatCor > 0 ? cBull : oFeatCor < 0 ? cBear : cGray
+            table.cell(cmdHdr, 0, 11, faS, text_color=cForecast, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 11, faL, text_color=cForecast, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 11, faH, text_color=cForecast, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 11, faR + " " + faC, text_color=faCol, text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 11, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 11, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 11, "—", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 11, "—", text_color=cGray, text_size=size.small, width=14)
+
+        // ROW 12 — Formal Performance Statistics
+        // Sharpe Ratio | Expectancy (R) | Max Drawdown | Profit Factor
+        if showStatsEngine
+            string sharpeStr = na(perfSharpe) ? "Sharpe —" : "Sharpe " + str.tostring(perfSharpe, "#.##")
+            color  sharpeCol = na(perfSharpe) ? cGray : perfSharpe >= 1.0 ? cBull : perfSharpe >= 0.5 ? cWarning : cBear
+            string expectStr = na(perfExpect) ? "Exp —" : "Exp " + (perfExpect > 0 ? "+" : "") + str.tostring(perfExpect, "#.##") + "R"
+            color  expectCol = na(perfExpect) ? cGray : perfExpect > 0.2 ? cBull : perfExpect > 0 ? cWarning : cBear
+            string ddStr     = na(perfMaxDD)  ? "MaxDD —" : "MaxDD " + str.tostring(perfMaxDD, "#.##") + "R"
+            color  ddCol     = na(perfMaxDD)  ? cGray : perfMaxDD < 2.0 ? cBull : perfMaxDD < 5.0 ? cWarning : cBear
+            string pfStr     = na(perfPF)     ? "PF —"    : "PF " + str.tostring(perfPF, "#.##")
+            color  pfCol     = na(perfPF)     ? cGray : perfPF >= 1.5 ? cBull : perfPF >= 1.0 ? cWarning : cBear
+            table.cell(cmdHdr, 0, 12, sharpeStr, text_color=sharpeCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 12, expectStr, text_color=expectCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 12, ddStr,     text_color=ddCol,     text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 12, pfStr,     text_color=pfCol,     text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 12, "Sharpe —", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 12, "Exp —",    text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 12, "MaxDD —",  text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 12, "PF —",     text_color=cGray, text_size=size.small, width=14)
+
+        // ROW 13 — Walk-Forward Validation
+        // IS WinRate | OOS WinRate | Degradation | WFV Grade
+        if showStatsEngine
+            string isStr  = na(wfvIS_WR)  ? "IS WR —"  : "IS WR "  + str.tostring(wfvIS_WR,  "0") + "%"
+            string oosStr = na(wfvOOS_WR) ? "OOS WR —" : "OOS WR " + str.tostring(wfvOOS_WR, "0") + "%"
+            string degrStr = na(wfvDegr)  ? "Degr —"   : "Degr " + (wfvDegr > 0 ? "+" : "") + str.tostring(wfvDegr, "0.0") + "pp"
+            color wfvCol = wfvGrade == "Excellent" ? cBull : wfvGrade == "Good" ? cWarning : cBear
+            table.cell(cmdHdr, 0, 13, isStr,          text_color=cGray,    text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 13, oosStr,         text_color=cForecast, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 13, degrStr,        text_color=wfvCol,   text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 13, "WFV " + wfvGrade, text_color=wfvCol, text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 13, "IS WR —",  text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 13, "OOS WR —", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 13, "Degr —",   text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 13, "WFV N/A",  text_color=cGray, text_size=size.small, width=14)
+
+        // ROW 14 — Probability Calibration: Brier Score + existing bucket grade
+        if showStatsEngine
+            string brierDisp = na(oCalBrier) ? "Brier —" : "Brier " + str.tostring(oCalBrier, "#.###")
+            color  brierCol  = na(oCalBrier) ? cGray : oCalBrier < 0.10 ? cBull : oCalBrier < 0.17 ? cWarning : cBear
+            string bucketStr = oCalGrade != "N/A" ? "Cal " + oCalGrade : "Cal N/A"
+            color  bucketCol = oCalGrade == "Excellent" ? cBull : oCalGrade == "Good" ? cWarning : cBear
+            string brierGrStr = oCalBrierStr != "N/A" ? oCalBrierStr : "N/A"
+            table.cell(cmdHdr, 0, 14, brierDisp,  text_color=brierCol,  text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 14, brierGrStr, text_color=brierCol,  text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 14, bucketStr,  text_color=bucketCol, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 14, oCalDetail != "" ? oCalDetail : "—", text_color=bucketCol, text_size=size.small, width=14)
+        else
+            table.cell(cmdHdr, 0, 14, "Brier —", text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 1, 14, "—",       text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 2, 14, "Cal —",   text_color=cGray, text_size=size.small, width=14)
+            table.cell(cmdHdr, 3, 14, "—",       text_color=cGray, text_size=size.small, width=14)
+
+//=====================================================================
+// VISUAL INDICATORS - Conditions
+//=====================================================================
+
+// ---- MSS (Market Structure Shift) labels ----
+mssLabelBull = bosLabelBull and bearTrend[1]
+mssLabelBear = bosLabelBear and bullTrend[1]
+
+// ---- Internal Liquidity Sweeps ----
+internalLiqSweepHigh = equalHighs and high > nz(swingHigh1) and close < nz(swingHigh1)
+internalLiqSweepLow  = equalLows  and low  < nz(swingLow1)  and close > nz(swingLow1)
+
+// ---- Asian Session Range ----
+float asianLookbackSec = timeframe.in_seconds()
+int   asianLookback    = int(asianLookbackSec >= 604800 ? 10 : asianLookbackSec >= 86400 ? 5 : math.max(5, math.round(25200 / asianLookbackSec)))
+float asianSessionHigh = ta.highest(high, asianLookback)
+float asianSessionLow  = ta.lowest(low,   asianLookback)
+bool asianHighSweep = inLondon and high > asianSessionHigh[1] and close < asianSessionHigh[1]
+bool asianLowSweep  = inLondon and low  < asianSessionLow[1]  and close > asianSessionLow[1]
+
+// ---- Manipulation Signal ----
+manipBearCandle = high > high[1] and close < close[1] and (high - math.max(open, close)) > bodySize * 0.5
+manipBullCandle = low < low[1] and close > close[1] and (math.min(open, close) - low) > bodySize * 0.5
+manipVolume = volume > volSma20 * 1.5
+manipRangeCond = candleRange > adaptiveATR * manipThreshold
+manipScore = (manipBearCandle or manipBullCandle ? 35 : 0) + (manipVolume ? 35 : 0) + (manipRangeCond ? 30 : 0)
+manipHigh = manipScore >= 60 and (manipBearCandle or manipBullCandle) and adxVal > 15
+
+//=====================================================================
+// PLOTS
+//=====================================================================
+
+// ---- EMAs ----
+plot(showEMAs and recentBars and not cleanInstitutional ? ema20 : na, "EMA 20", ema20Color, 1, plot.style_line, display=display.all)
+plot(showEMAs and recentBars and not cleanInstitutional ? ema50 : na, "EMA 50", ema50Color, 1, plot.style_line, display=display.all)
+plot(showEMAs and recentBars and not cleanInstitutional ? ema200 : na, "EMA 200", ema200Color, 1, plot.style_line, display=display.all)
+
+// ---- VWAP ----
+plot(showVWAP and recentBars and not cleanInstitutional ? vwapVal : na, "VWAP", color.new(#A0A0A0, 30), 1, plot.style_line, display=display.all)
+
+// ---- ADX (minimal opacity) ----
+plot(not perfMode and showADX and recentBars and not cleanInstitutional and not professionalMode ? adxVal : na, "ADX", cAdxC, 1, plot.style_histogram, display=display.all)
+hline(perfMode ? na : showADX and not cleanInstitutional ? adxThreshold : na, "ADX Thresh", color.new(#FF4D4D, 50), hline.style_dashed, display=display.none)
+
+// ---- Order Block Visuals (phase 1) ----
+plot(obBullActive and showOB and not cleanInstitutional ? obBullLow : na, "Bull OB Low", color.new(#00D084, 30), 1, plot.style_linebr, display=display.all)
+plot(obBullActive and showOB and not cleanInstitutional ? obBullHigh : na, "Bull OB High", color.new(#00D084, 30), 1, plot.style_linebr, display=display.all)
+plot(obBearActive and showOB and not cleanInstitutional ? obBearLow : na, "Bear OB Low", color.new(#FF4D4D, 30), 1, plot.style_linebr, display=display.all)
+plot(obBearActive and showOB and not cleanInstitutional ? obBearHigh : na, "Bear OB High", color.new(#FF4D4D, 30), 1, plot.style_linebr, display=display.all)
+
+fill(plot(obBullActive and showOB and not cleanInstitutional ? obBullLow  : na, display=display.none),
+     plot(obBullActive and showOB and not cleanInstitutional ? obBullHigh : na, display=display.none),
+     color.new(#00D084, 90), title="Bull OB Fill")
+fill(plot(obBearActive and showOB and not cleanInstitutional ? obBearLow  : na, display=display.none),
+     plot(obBearActive and showOB and not cleanInstitutional ? obBearHigh : na, display=display.none),
+     color.new(#FF4D4D, 90), title="Bear OB Fill")
+
+// ---- FVG Quality Filter (max 3 active) ----
+int fvgActiveCount = 0
+for i = 1 to math.min(30, bar_index)
+    if fvgActive[i] and not fvgMitigated[i]
+        fvgActiveCount += 1
+bool fvgShowQuality = fvgActiveCount <= 3 or not showFVG
+
+// ---- FVG Visuals (quality-filtered) ----
+bool fvgPlotOk = fvgActive and showFVG and fvgShowQuality and not cleanInstitutional
+plot(fvgPlotOk ? fvgUpperLine : na, "FVG Upper", color.new(#00C2FF, 20), 1, plot.style_linebr, display=display.all)
+plot(fvgPlotOk ? fvgLowerLine : na, "FVG Lower", color.new(#00C2FF, 20), 1, plot.style_linebr, display=display.all)
+fill(plot(fvgPlotOk ? fvgUpperLine : na, display=display.none),
+     plot(fvgPlotOk ? fvgLowerLine : na, display=display.none),
+     color.new(#00C2FF, 88), title="FVG Fill")
+
+// ---- Liquidity Level Lines (subtle opacity, Phase 1 — <40% visual objects) ----
+plot(showPDH and not na(poolPdH) and recentBars and showLiqPools and not cleanInstitutional ? poolPdH : na, "PDH", color.new(#FF4D4D, 30), 1, plot.style_line, display=display.all)
+plot(showPDL and not na(poolPdL) and recentBars and showLiqPools and not cleanInstitutional ? poolPdL : na, "PDL", color.new(#00D084, 30), 1, plot.style_line, display=display.all)
+plot(showPWH and not na(poolPwH) and recentBars and showLiqPools and not cleanInstitutional ? poolPwH : na, "PWH", color.new(#FF8C00, 40), 1, plot.style_line, display=display.all)
+plot(showPWL and not na(poolPwL) and recentBars and showLiqPools and not cleanInstitutional ? poolPwL : na, "PWL", color.new(#00C2FF, 40), 1, plot.style_line, display=display.all)
+// ---- EQH / EQL (circles removed — labeled on chart lines) ----
+
+// ---- Support / Resistance at current bar only (no past/future projection) ----
+
+// ---- Macro Strength Score as subplot ----
+plot(showMacro and macroIntelValid and recentBars and showMacroPanel and not cleanInstitutional and not professionalMode ? macroStrengthScore : na, "Macro", color.new(#FF8C00, 50), 2, plot.style_histogram, display=display.all)
+
+// ---- Corr Breakdown ----
+plot(showCorrHealth and corrBreakdown and recentBars and not cleanInstitutional and not professionalMode ? close : na, "Corr Break", color.new(#FF4D4D, 60), 3, plot.style_line, display=display.all)
+
+// ---- MSS (Market Structure Shift) — prominent chart label (quality gated) ----
+bool mssQualityOk = adxVal > adxThreshold and displacementUp or displacementDown
+var int lastMSSBar = -1
+if recentBars and barstate.isconfirmed and mssLabelBull and bar_index != lastMSSBar and mssQualityOk
+    label.new(bar_index, low, "MSS", style=label.style_label_center, color=color.new(#00D084, 60), textcolor=#FFFFFF, size=size.normal, textalign=text.align_center)
+    lastMSSBar := bar_index
+if recentBars and barstate.isconfirmed and mssLabelBear and bar_index != lastMSSBar and mssQualityOk
+    label.new(bar_index, high, "MSS", style=label.style_label_center, color=color.new(#FF4D4D, 60), textcolor=#FFFFFF, size=size.normal, textalign=text.align_center)
+    lastMSSBar := bar_index
+
+// ---- BOS (Break of Structure) — non-trend-flip structure breaks (quality gated) ----
+bool bosQualityOk = adxVal > 15 and (displacementUp or displacementDown or highVolume)
+var int lastBOSBar = -1
+if recentBars and barstate.isconfirmed and bosLabelBull and not bearTrend[1] and bar_index != lastBOSBar and bosQualityOk
+    label.new(bar_index, low, "BOS", style=label.style_label_center, color=color.new(#00D084, 50), textcolor=#FFFFFF, size=size.small, textalign=text.align_center)
+    lastBOSBar := bar_index
+if recentBars and barstate.isconfirmed and bosLabelBear and not bullTrend[1] and bar_index != lastBOSBar and bosQualityOk
+    label.new(bar_index, high, "BOS", style=label.style_label_center, color=color.new(#FF4D4D, 50), textcolor=#FFFFFF, size=size.small, textalign=text.align_center)
+    lastBOSBar := bar_index
+
+// ---- Liquidity Sweep Labels (auto-hide after 5 bars) ----
+var label liqSweepLabel = na
+var int liqSweepBar = -999
+if (liqSweepBear or liqSweepBull) and barstate.isconfirmed and bar_index > liqSweepBar + 3 and not cleanInstitutional and not professionalMode
+    string swpText = "Liq Sweep"
+    color  swpCol  = liqSweepBear ? #00D084 : #FF4D4D
+    float  swpY    = liqSweepBear ? low - adaptiveATR * 0.5 : high + adaptiveATR * 0.5
+    if not na(liqSweepLabel)
+        label.delete(liqSweepLabel)
+    liqSweepLabel := label.new(bar_index, swpY, swpText, style=label.style_label_center, color=color.new(swpCol, 70), textcolor=#FFFFFF, size=size.small, textalign=text.align_center)
+    liqSweepBar := bar_index
+if not liqSweepBear and not liqSweepBull and not na(liqSweepLabel) and bar_index > liqSweepBar + 5
+    label.delete(liqSweepLabel)
+    liqSweepLabel := na
+
+// ---- Asian Sweep Labels (3-bar visible) ----
+var label asianSweepLabel = na
+var int asianSweepBar = -999
+if showAsianSweeps and (asianHighSweep or asianLowSweep) and barstate.isconfirmed and bar_index > asianSweepBar + 3
+    string asiText = "Asia Sweep"
+    color  asiCol  = asianHighSweep ? #FF4D4D : #00D084
+    float  asiY    = asianHighSweep ? high + adaptiveATR * 0.3 : low - adaptiveATR * 0.3
+    if not na(asianSweepLabel)
+        label.delete(asianSweepLabel)
+    asianSweepLabel := label.new(bar_index, asiY, asiText, style=label.style_label_center, color=color.new(asiCol, 70), textcolor=#FFFFFF, size=size.small, textalign=text.align_center)
+    asianSweepBar := bar_index
+if not asianHighSweep and not asianLowSweep and not na(asianSweepLabel) and bar_index > asianSweepBar + 5
+    label.delete(asianSweepLabel)
+    asianSweepLabel := na
+
+// ---- Manipulation Labels ----
+var label manipLabel = na
+var int manipBar = -999
+if showManipulation and recentBars and barstate.isconfirmed and manipHigh and bar_index > manipBar + 5
+    string manipText = "Manip"
+    float  manipY = manipBearCandle ? high + adaptiveATR * 0.3 : low - adaptiveATR * 0.3
+    color  manipCol = manipBearCandle ? #FF4D4D : #00D084
+    if not na(manipLabel)
+        label.delete(manipLabel)
+    manipLabel := label.new(bar_index, manipY, manipText, style=label.style_label_center, color=color.new(manipCol, 70), textcolor=#FFFFFF, size=size.small, textalign=text.align_center)
+    manipBar := bar_index
+if not manipHigh and not na(manipLabel) and bar_index > manipBar + 5
+    label.delete(manipLabel)
+    manipLabel := na
+
+//=====================================================================
+// CLEAN RIGHT-AXIS LABELS — Institutional Price Scale
+// Keep only: Current Price, VWAP(ATR), EMA200(ATR), Support, Resistance
+// Line labels drawn directly on dashed level lines
+//=====================================================================
+
+if barstate.islast
+    var float currPrice = close
+    var priceLabel = label.new(na, na, "", style=label.style_label_right, color=color.new(#0F172A, 100), textcolor=#F1F5F9, size=size.small, textalign=text.align_left)
+    label.set_xy(priceLabel, bar_index, currPrice)
+    label.set_text(priceLabel, str.tostring(currPrice, "#.##"))
+
+    if showLiqPools and not cleanInstitutional
+        // Clean institutional lines — current bar only, labels attached at line end
+        var pdhLine   = line.new(na, na, na, na, color=color.new(#FF4D4D, 60), width=1, style=line.style_solid, extend=extend.none)
+        var pdlLine   = line.new(na, na, na, na, color=color.new(#00D084, 60), width=1, style=line.style_solid, extend=extend.none)
+        var pwhLine   = line.new(na, na, na, na, color=color.new(#FF8C00, 60), width=1, style=line.style_solid, extend=extend.none)
+        var pwlLine   = line.new(na, na, na, na, color=color.new(#00C2FF, 60), width=1, style=line.style_solid, extend=extend.none)
+        var pdhLabel  = label.new(na, na, "", style=label.style_label_left, color=color.new(#0F172A, 100), textcolor=#FF4D4D, size=size.tiny, textalign=text.align_left)
+        var pdlLabel  = label.new(na, na, "", style=label.style_label_left, color=color.new(#0F172A, 100), textcolor=#00D084, size=size.tiny, textalign=text.align_left)
+        var pwhLabel  = label.new(na, na, "", style=label.style_label_left, color=color.new(#0F172A, 100), textcolor=#FF8C00, size=size.tiny, textalign=text.align_left)
+        var pwlLabel  = label.new(na, na, "", style=label.style_label_left, color=color.new(#0F172A, 100), textcolor=#00C2FF, size=size.tiny, textalign=text.align_left)
+
+        if not na(poolPdH)
+            line.set_xy1(pdhLine, bar_index - 2, poolPdH)
+            line.set_xy2(pdhLine, bar_index, poolPdH)
+            label.set_xy(pdhLabel, bar_index + 1, poolPdH)
+            label.set_text(pdhLabel, "PDH " + str.tostring(poolPdH, "#.##"))
+        if not na(poolPdL)
+            line.set_xy1(pdlLine, bar_index - 2, poolPdL)
+            line.set_xy2(pdlLine, bar_index, poolPdL)
+            label.set_xy(pdlLabel, bar_index + 1, poolPdL)
+            label.set_text(pdlLabel, "PDL " + str.tostring(poolPdL, "#.##"))
+        if not na(poolPwH)
+            line.set_xy1(pwhLine, bar_index - 2, poolPwH)
+            line.set_xy2(pwhLine, bar_index, poolPwH)
+            label.set_xy(pwhLabel, bar_index + 1, poolPwH)
+            label.set_text(pwhLabel, "PWH " + str.tostring(poolPwH, "#.##"))
+        if not na(poolPwL)
+            line.set_xy1(pwlLine, bar_index - 2, poolPwL)
+            line.set_xy2(pwlLine, bar_index, poolPwL)
+            label.set_xy(pwlLabel, bar_index + 1, poolPwL)
+            label.set_text(pwlLabel, "PWL " + str.tostring(poolPwL, "#.##"))
+
+    // VWAP — right-axis label, always visible (Phase 8)
+    if showVWAP
+        var float lastVwap = na
+        lastVwap := vwapVal
+        var vwapLine  = line.new(na, na, na, na, color=color.new(#A0A0A0, 30), width=1, style=line.style_solid, extend=extend.none)
+        var vwapLabel = label.new(na, na, "", style=label.style_label_right, color=color.new(#0F172A, 100), textcolor=#A0A0A0, size=size.small, textalign=text.align_left)
+        line.set_xy1(vwapLine, bar_index - 50, lastVwap)
+        line.set_xy2(vwapLine, bar_index, lastVwap)
+        label.set_xy(vwapLabel, bar_index - 2, lastVwap)
+        label.set_text(vwapLabel, "VWAP " + str.tostring(lastVwap, "#.##"))
+
+    // EMA200 — right-axis label, always visible (Phase 8)
+    if showEMAs
+        var ema200Line  = line.new(na, na, na, na, color=color.new(#00C2FF, 25), width=1, style=line.style_solid, extend=extend.none)
+        var ema200Label = label.new(na, na, "", style=label.style_label_right, color=color.new(#0F172A, 100), textcolor=#00C2FF, size=size.small, textalign=text.align_left)
+        line.set_xy1(ema200Line, bar_index - 50, ema200)
+        line.set_xy2(ema200Line, bar_index, ema200)
+        label.set_xy(ema200Label, bar_index - 2, ema200)
+        label.set_text(ema200Label, "EMA200 " + str.tostring(ema200, "#.##"))
+
+    // Nearest Support — solid green tick at current bar only (no past/future line)
+    if showSR and not na(supportLevel)
+        var supLine  = line.new(na, na, na, na, color=color.new(#00D084, 0), width=2, style=line.style_solid, extend=extend.none)
+        var supLabel = label.new(na, na, "", style=label.style_label_right, color=color.new(#0F172A, 100), textcolor=#00D084, size=size.tiny, textalign=text.align_left)
+        if math.abs(supportLevel - currPrice) < adaptiveATR * 3
+            line.set_xy1(supLine, bar_index - 1, supportLevel)
+            line.set_xy2(supLine, bar_index, supportLevel)
+            label.set_xy(supLabel, bar_index - 2, supportLevel)
+            label.set_text(supLabel, "Support " + str.tostring(supportLevel, "#.##"))
+        else
+            label.set_text(supLabel, "")
+            line.set_xy1(supLine, na, na)
+            line.set_xy2(supLine, na, na)
+
+    // Nearest Resistance — solid red tick at current bar only (no past/future line)
+    if showSR and not na(resistanceLevel)
+        var resLine  = line.new(na, na, na, na, color=color.new(#FF4D4D, 0), width=2, style=line.style_solid, extend=extend.none)
+        var resLabel = label.new(na, na, "", style=label.style_label_right, color=color.new(#0F172A, 100), textcolor=#FF4D4D, size=size.tiny, textalign=text.align_left)
+        if math.abs(resistanceLevel - currPrice) < adaptiveATR * 3
+            line.set_xy1(resLine, bar_index - 1, resistanceLevel)
+            line.set_xy2(resLine, bar_index, resistanceLevel)
+            label.set_xy(resLabel, bar_index - 2, resistanceLevel)
+            label.set_text(resLabel, "Resistance " + str.tostring(resistanceLevel, "#.##"))
+        else
+            label.set_text(resLabel, "")
+            line.set_xy1(resLine, na, na)
+            line.set_xy2(resLine, na, na)
+
+//=====================================================================
+// SMART ALERT FRAMEWORK - analysis only, no trade execution
+//=====================================================================
+
+alertcondition(shouldBuy,  title="Nexus Buy Signal",  message="XAUUSD: Buy signal @ {{close}} | Bias: {{biasLabel}} | Conf: {{regimeConfidence}}% | Session: {{sessionLabel}}")
+alertcondition(shouldSell, title="Nexus Sell Signal", message="XAUUSD: Sell signal @ {{close}} | Bias: {{biasLabel}} | Conf: {{regimeConfidence}}% | Session: {{sessionLabel}}")
+
+if shouldBuy and barstate.isconfirmed and not perfMode
+    alert("XAUUSD NEXUS BUY @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar)
+if shouldSell and barstate.isconfirmed and not perfMode
+    alert("XAUUSD NEXUS SELL @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar)
+
+alertcondition(showSignals and barstate.isconfirmed and bullBOS, "Bull BOS", "XAUUSD Bull BOS @ {{close}}")
+alertcondition(showSignals and barstate.isconfirmed and bearBOS, "Bear BOS", "XAUUSD Bear BOS @ {{close}}")
+
+//=====================================================================
+// PREMIUM / DISCOUNT ZONE SHADING
+// Premium = above intraday dealing range midpoint (bearish zone)
+// Discount = below midpoint (bullish zone)
+// Shown only on recent bars with subtle transparency
+//=====================================================================
+float dealingRangeMid = (ta.highest(high, 20) + ta.lowest(low, 20)) / 2
+color premiumColor = color.new(#FF4D4D, 95)
+color discountColor = color.new(#00D084, 95)
+
+var line premiumLine = na
+var line discountLine = na
+var box premiumBox = na
+var box discountBox = na
+if showPremiumDisc and barstate.islast and recentBars and not cleanInstitutional and not professionalMode
+    if na(premiumLine)
+        premiumLine := line.new(na, na, na, na, color=premiumColor, width=1, style=line.style_solid, extend=extend.none)
+    if na(discountLine)
+        discountLine := line.new(na, na, na, na, color=discountColor, width=1, style=line.style_solid, extend=extend.none)
+    // Premium zone: from dealing range midpoint to top of visible range
+    float chartTop = ta.highest(high, 100) * 1.02
+    float chartBot = ta.lowest(low, 100) * 0.98
+    line.set_xy1(premiumLine, bar_index - 5, dealingRangeMid)
+    line.set_xy2(premiumLine, bar_index, dealingRangeMid)
+    line.set_xy1(discountLine, bar_index - 5, dealingRangeMid)
+    line.set_xy2(discountLine, bar_index, dealingRangeMid)
+    if na(premiumBox)
+        premiumBox := box.new(na, na, na, na, bgcolor=premiumColor, border_color=na, extend=extend.none)
+    if na(discountBox)
+        discountBox := box.new(na, na, na, na, bgcolor=discountColor, border_color=na, extend=extend.none)
+    box.set_lefttop(premiumBox, bar_index - 5, chartTop)
+    box.set_rightbottom(premiumBox, bar_index, dealingRangeMid)
+    box.set_lefttop(discountBox, bar_index - 5, dealingRangeMid)
+    box.set_rightbottom(discountBox, bar_index, chartBot)
+
+//=====================================================================
+// FORECAST CONE — M12-powered projection with confidence bands
+// Combines Historical Analog + Trend Persistence + Liq Destination + Regime
+//=====================================================================
+
+if barstate.islast and showForecastCone and not cleanInstitutional and not professionalMode
+    // Determine cone direction from M12 forecast probabilities
+    string coneLabel = "RNG"
+    float coneDir = 0.0
+    float coneProb = fRng
+    if fBull >= fBear and fBull >= fRng
+        coneLabel := "BULL"
+        coneDir := 1.0
+        coneProb := fBull
+    else if fBear >= fBull and fBear >= fRng
+        coneLabel := "BEAR"
+        coneDir := -1.0
+        coneProb := fBear
+    // Slope magnitude scales with probability conviction and ATR
+    float coneSlope = adaptiveATR * (coneProb - 50.0) / 100.0 * coneDir * 0.5
+    float centerEnd = close + coneSlope * forecastBars
+    float startBand = (math.max(adaptiveATR, ta.atr(atrLen)) / 2.0) * (forecastZ / 2.0)
+    float endBand   = startBand * math.sqrt(math.max(forecastBars, 1))
+
+    var line fcCenter = line.new(na, na, na, na, color=color.new(#00C2FF, 70), width=1, style=line.style_solid, extend=extend.none)
+    var line fcUpper  = line.new(na, na, na, na, color=color.new(#00C2FF, 30), width=1, style=line.style_dashed, extend=extend.none)
+    var line fcLower  = line.new(na, na, na, na, color=color.new(#00C2FF, 30), width=1, style=line.style_dashed, extend=extend.none)
+    var label fcLabel = label.new(na, na, "", style=label.style_label_center, color=color.new(#0F172A, 100), textcolor=#00C2FF, size=size.tiny, textalign=text.align_center)
+
+    line.set_xy1(fcCenter, bar_index, close)
+    line.set_xy2(fcCenter, bar_index + forecastBars, centerEnd)
+    line.set_xy1(fcUpper, bar_index, close + startBand)
+    line.set_xy2(fcUpper, bar_index + forecastBars, centerEnd + endBand)
+    line.set_xy1(fcLower, bar_index, close - startBand)
+    line.set_xy2(fcLower, bar_index + forecastBars, centerEnd - endBand)
+    label.set_xy(fcLabel, bar_index + forecastBars + 1, centerEnd)
+    label.set_text(fcLabel, coneLabel + " " + str.tostring(int(coneProb)) + "%")
+
+//=====================================================================
+// END OF INDICATOR
+//=====================================================================

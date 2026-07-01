@@ -1,0 +1,2 @@
+TradeID,Date,SignalBar,EntryBar,FillBar,SignalType,EntryPrice,StopLoss,TP1,TP2,ExitBar,ExitPrice,ExitReason,ExpectedRR,ActualRR,ProfitLoss,Notes
+,,Signal generation timestamp,Bar# strategy signal fired,Bar# of actual fill,long/short,,,,,Bar# of exit,,,,,,

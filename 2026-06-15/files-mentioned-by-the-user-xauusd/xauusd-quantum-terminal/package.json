@@ -1,0 +1,27 @@
+{
+  "name": "xauusd-quantum-terminal",
+  "version": "3.0.0",
+  "private": true,
+  "description": "XAUUSD Quantum 3.0 — Institutional Intelligence Terminal",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json}\"",
+    "typecheck": "turbo typecheck",
+    "clean": "turbo clean",
+    "deploy:api": "cd apps/api && npx wrangler deploy",
+    "deploy:web": "cd apps/web && npx wrangler pages deploy ./out",
+    "db:migrate": "cd apps/api && npx wrangler d1 migrations apply xauusd-quantum-db"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@9.1.0"
+}

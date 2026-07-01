@@ -1,0 +1,64 @@
+name: CI — Quantum Trading Platform
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements-dev.txt
+      - run: pip install -e .
+
+      # Static analysis
+      - name: Lint
+        run: ruff check backend/
+
+      - name: Type check
+        run: mypy backend/ --ignore-missing-imports
+
+      # Unit tests
+      - name: Unit tests
+        run: pytest tests/unit -v --cov=backend --cov-report=term-missing
+
+      # Performance benchmarks (informational)
+      - name: Benchmarks
+        run: pytest tests/unit --benchmark-only --benchmark-columns=min,mean,std || true
+
+  validation-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-dev.txt
+      - name: Run full validation
+        run: pie validation run --stream all
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+  deploy-workers:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          workingDirectory: workers/
