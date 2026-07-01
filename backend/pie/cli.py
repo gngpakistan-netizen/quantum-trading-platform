@@ -23,7 +23,7 @@ from backend.pie.models import (
 )
 
 
-def cmd_status():
+def cmd_status() -> None:
     """Display project health summary."""
     req_count = len(RTM_REQUIREMENTS)
     req_done = sum(1 for r in RTM_REQUIREMENTS.values() if r.status == "validated")
@@ -45,11 +45,10 @@ def cmd_status():
     print("╚══════════════════════════════════════════════════════════╝")
 
 
-def cmd_requirements(status_filter: Optional[str] = None):
+def cmd_requirements(status_filter: Optional[str] = None) -> None:
     """List requirements with optional status filter."""
-    items = RTM_REQUIREMENTS.values()
-    if status_filter:
-        items = [r for r in items if r.status == status_filter]
+    all_items = list(RTM_REQUIREMENTS.values())
+    items = [r for r in all_items if r.status == status_filter] if status_filter else all_items
 
     if not items:
         print("No requirements found.")
@@ -62,7 +61,7 @@ def cmd_requirements(status_filter: Optional[str] = None):
         print(f"{r.id:<12} {r.status:<14} {r.origin:<10} {desc:<50}")
 
 
-def cmd_todo_list():
+def cmd_todo_list() -> None:
     """List all open TODOs."""
     open_todos = [t for t in PIE_TODOS if t.status != "completed"]
     if not open_todos:
@@ -76,14 +75,14 @@ def cmd_todo_list():
         print(f"{tid:<8} {t.priority:<10} {t.status:<14} {t.content}")
 
 
-def cmd_todo_add(content: str, priority: str = "medium"):
+def cmd_todo_add(content: str, priority: str = "medium") -> None:
     """Add a new TODO."""
     todo = TodoItem(content=content, priority=priority)
     PIE_TODOS.append(todo)
     print(f"Added TODO [{str(todo.id)[:8]}]: {content}")
 
 
-def cmd_todo_done(todo_id: str):
+def cmd_todo_done(todo_id: str) -> None:
     """Mark a TODO as completed."""
     for t in PIE_TODOS:
         if str(t.id).startswith(todo_id):
@@ -94,18 +93,18 @@ def cmd_todo_done(todo_id: str):
     print(f"TODO not found: {todo_id}")
 
 
-def cmd_audit_latest():
+def cmd_audit_latest() -> None:
     """Display latest audit score."""
     print("No audit runs yet. Use `pie audit run` to execute.")
 
 
-def cmd_release_create(version: str, notes: Optional[str] = None):
+def cmd_release_create(version: str, notes: Optional[str] = None) -> None:
     """Create a new release entry."""
     release = Release(version=version, notes=notes)
     print(f"Created release: {release.version} ({release.release_date})")
 
 
-def main():
+def main() -> int:
     args = sys.argv[1:]
     if not args:
         print("Usage: pie <command> [options]")

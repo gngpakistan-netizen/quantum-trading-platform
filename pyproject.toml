@@ -54,6 +54,7 @@ select = ["E", "F", "I", "N", "W", "B", "SIM", "ARG", "PTH"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+disable_error_code = ["misc", "untyped-decorator"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

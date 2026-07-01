@@ -232,8 +232,8 @@ class StatisticalValidator:
         if not closed:
             return {"error": "No closed trades"}
 
-        winners = [t for t in closed if t.pnl > 0]
-        losers = [t for t in closed if t.pnl <= 0]
+        winners = [t for t in closed if t.pnl is not None and t.pnl > 0]
+        losers = [t for t in closed if t.pnl is not None and t.pnl <= 0]
         total = len(closed)
 
         # Basic metrics
@@ -245,10 +245,10 @@ class StatisticalValidator:
         profit_factor = abs(sum(t.pnl for t in winners) / loss_sum) if losers and loss_sum != 0 else float('inf')
 
         # Confusion matrix (long vs short)
-        tp = sum(1 for t in closed if t.direction == "long" and t.pnl > 0)
-        fp = sum(1 for t in closed if t.direction == "long" and t.pnl <= 0)
-        tn = sum(1 for t in closed if t.direction == "short" and t.pnl <= 0)
-        fn = sum(1 for t in closed if t.direction == "short" and t.pnl > 0)
+        tp = sum(1 for t in closed if t.direction == "long" and t.pnl is not None and t.pnl > 0)
+        fp = sum(1 for t in closed if t.direction == "long" and t.pnl is not None and t.pnl <= 0)
+        tn = sum(1 for t in closed if t.direction == "short" and t.pnl is not None and t.pnl <= 0)
+        fn = sum(1 for t in closed if t.direction == "short" and t.pnl is not None and t.pnl > 0)
 
         # Derived metrics
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
@@ -257,11 +257,11 @@ class StatisticalValidator:
         expectancy = win_rate * avg_win + (1 - win_rate) * avg_loss
 
         # Drawdown
-        cumulative = 0
-        peak = 0
+        cumulative = 0.0
+        peak = 0.0
         max_dd = 0.0
         for t in closed:
-            cumulative += t.pnl or 0
+            cumulative += t.pnl if t.pnl is not None else 0
             if cumulative > peak:
                 peak = cumulative
             dd = (peak - cumulative) / peak if peak > 0 else 0

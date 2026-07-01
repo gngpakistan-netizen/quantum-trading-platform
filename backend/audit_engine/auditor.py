@@ -6,7 +6,7 @@ Overall score is weighted composite. Scores below threshold trigger alerts.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from backend.validation_engine.validator import ValidationReport
 
@@ -164,7 +164,7 @@ class AuditEngine:
             f"Unit: {unit_count}, Integration: {integration_count}, Regression: {has_regression}, CI: {has_ci}"
         )
 
-    def compute_overall(self) -> dict[str, object]:
+    def compute_overall(self) -> dict[str, Any]:
         """Compute weighted overall audit score and generate recommendations."""
         overall = 0.0
         all_recommendations = []
@@ -215,7 +215,7 @@ class AuditEngine:
         if ts is not None:
             lines.append(f"  AUDIT REPORT — {ts.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         else:
-            lines.append(f"  AUDIT REPORT — (no timestamp)")
+            lines.append("  AUDIT REPORT — (no timestamp)")
         lines.append(f"  Overall Score: {result['overall']}/100 [{result['rating']}]")
         lines.append("=" * 60)
         lines.append("")

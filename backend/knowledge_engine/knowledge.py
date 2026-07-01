@@ -33,14 +33,14 @@ class KnowledgeSnapshot:
     requirements: dict[str, Requirement] = field(default_factory=dict)
     formulas: dict[str, FormulaEntry] = field(default_factory=dict)
     decisions: list[DecisionRecord] = field(default_factory=list)
-    audit_scores: list[dict] = field(default_factory=list)
+    audit_scores: list[dict[str, object]] = field(default_factory=list)
     version: str = ""
 
 
 class KnowledgeEngine:
     """Central knowledge repository. All access is read-only; mutations go through audit."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._formulas: dict[str, FormulaEntry] = {}
         self._requirements: dict[str, Requirement] = {}
         self._decisions: list[DecisionRecord] = []
@@ -49,7 +49,7 @@ class KnowledgeEngine:
     # ============================================================
     # Formulas
     # ============================================================
-    def register_formula(self, entry: FormulaEntry):
+    def register_formula(self, entry: FormulaEntry) -> None:
         """Register or update a formula (creates new version)."""
         existing = self._formulas.get(entry.id)
         if existing:
@@ -68,7 +68,7 @@ class KnowledgeEngine:
     # ============================================================
     # Requirements (RTM)
     # ============================================================
-    def register_requirement(self, req: Requirement):
+    def register_requirement(self, req: Requirement) -> None:
         self._requirements[req.id] = req
 
     def get_requirement(self, req_id: str) -> Optional[Requirement]:
@@ -86,7 +86,7 @@ class KnowledgeEngine:
     # ============================================================
     # Decisions
     # ============================================================
-    def record_decision(self, decision: DecisionRecord):
+    def record_decision(self, decision: DecisionRecord) -> None:
         """Record a decision. Immutable once added."""
         self._decisions.append(decision)
 
@@ -99,7 +99,7 @@ class KnowledgeEngine:
     # ============================================================
     # Audit History
     # ============================================================
-    def record_audit(self, audit_result: dict[str, object]):
+    def record_audit(self, audit_result: dict[str, object]) -> None:
         """Store an audit result with timestamp."""
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -112,7 +112,12 @@ class KnowledgeEngine:
 
     def get_audit_trend(self, dimension: str = "overall") -> list[float]:
         """Get scores over time for a dimension to see trend."""
-        return [float(a.get(dimension, 0)) for a in self._audit_history]
+        scores: list[float] = []
+        for a in self._audit_history:
+            val = a.get(dimension, 0)
+            if isinstance(val, (int, float)):
+                scores.append(float(val))
+        return scores
 
     # ============================================================
     # Reporting

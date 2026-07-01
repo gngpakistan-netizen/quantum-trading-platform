@@ -436,7 +436,7 @@ def compute_evidence_aggregate(
 
 def normalize_scores(
     raw_bull: float, raw_bear: float, range_evidence: float,
-    regime_strength: float, regime_trending: bool, regime_ranging: bool,
+    _regime_strength: float, regime_trending: bool, regime_ranging: bool,
 ) -> tuple[float, float, float, str]:
     """Normalize evidence scores to 0-100 matching Pine lines 1890-1934."""
     # Regime-based range base
