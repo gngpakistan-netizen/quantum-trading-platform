@@ -1,9 +1,15 @@
-fastapi
-uvicorn[standard]
-pydantic
-pandas
-numpy
-httpx
-python-dotenv
-pytest
-psycopg2-binary
+-r requirements.txt
+
+# Testing
+pytest>=8.0
+pytest-cov>=4.1
+pytest-asyncio>=0.23
+pytest-benchmark>=4.0
+hypothesis>=6.98
+httpx>=0.26
+
+# Linting & Types
+ruff>=0.2
+mypy>=1.8
+bandit>=1.7
+pre-commit>=3.6

@@ -17,25 +17,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       - run: pip install -r requirements-dev.txt
-      - run: pip install -e .
 
       # Static analysis
       - name: Lint
-        run: ruff check backend/
+        run: python -m ruff check backend/
 
       - name: Type check
-        run: mypy backend/ --ignore-missing-imports
+        run: python -m mypy backend/ --ignore-missing-imports
 
       # Unit tests
       - name: Unit tests
-        run: pytest tests/unit -v --cov=backend --cov-report=term-missing
-
-      # Performance benchmarks (informational)
-      - name: Benchmarks
-        run: pytest tests/unit --benchmark-only --benchmark-columns=min,mean,std || true
+        run: python -m pytest tests/unit -v
 
   validation-nightly:
     if: github.event_name == 'schedule'
@@ -62,3 +56,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           workingDirectory: workers/
+        env:
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
