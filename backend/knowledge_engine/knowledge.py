@@ -44,7 +44,7 @@ class KnowledgeEngine:
         self._formulas: dict[str, FormulaEntry] = {}
         self._requirements: dict[str, Requirement] = {}
         self._decisions: list[DecisionRecord] = []
-        self._audit_history: list[dict] = []
+        self._audit_history: list[dict[str, object]] = []
 
     # ============================================================
     # Formulas
@@ -99,7 +99,7 @@ class KnowledgeEngine:
     # ============================================================
     # Audit History
     # ============================================================
-    def record_audit(self, audit_result: dict):
+    def record_audit(self, audit_result: dict[str, object]):
         """Store an audit result with timestamp."""
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -107,17 +107,17 @@ class KnowledgeEngine:
         }
         self._audit_history.append(entry)
 
-    def get_audit_history(self, limit: int = 10) -> list[dict]:
+    def get_audit_history(self, limit: int = 10) -> list[dict[str, object]]:
         return self._audit_history[-limit:]
 
     def get_audit_trend(self, dimension: str = "overall") -> list[float]:
         """Get scores over time for a dimension to see trend."""
-        return [a.get(dimension, 0) for a in self._audit_history]
+        return [float(a.get(dimension, 0)) for a in self._audit_history]
 
     # ============================================================
     # Reporting
     # ============================================================
-    def generate_knowledge_report(self) -> dict:
+    def generate_knowledge_report(self) -> dict[str, object]:
         """Generate a summary of all knowledge."""
         return {
             "formulas": {

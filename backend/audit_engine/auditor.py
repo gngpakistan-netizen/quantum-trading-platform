@@ -23,13 +23,13 @@ class AuditDimension:
     findings: list[str] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
 
-    def add_evidence(self, evidence: str):
+    def add_evidence(self, evidence: str) -> None:
         self.evidence.append(evidence)
 
-    def add_finding(self, finding: str):
+    def add_finding(self, finding: str) -> None:
         self.findings.append(finding)
 
-    def add_recommendation(self, rec: str):
+    def add_recommendation(self, rec: str) -> None:
         self.recommendations.append(rec)
 
 
@@ -39,7 +39,7 @@ class AuditDimension:
 class AuditEngine:
     """10-dimension weighted audit scoring with evidence linking."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.dimensions: dict[str, AuditDimension] = {
             "architecture": AuditDimension(name="Architecture", weight=0.10),
             "mathematics": AuditDimension(name="Mathematics", weight=0.15),
@@ -54,7 +54,7 @@ class AuditEngine:
         }
         self.run_timestamp: Optional[datetime] = None
 
-    def ingest_validation_report(self, report: ValidationReport):
+    def ingest_validation_report(self, report: ValidationReport) -> None:
         """Incorporate validation results into relevant audit dimensions."""
         # Mathematics dimension
         if report.stream == "mathematical":
@@ -100,7 +100,7 @@ class AuditEngine:
                 f"Dashboard sync: {report.passed}/{report.total_checks} values match"
             )
 
-    def score_architecture(self, has_adrs: bool, has_docs: bool, has_contracts: bool, module_count: int):
+    def score_architecture(self, has_adrs: bool, has_docs: bool, has_contracts: bool, module_count: int) -> None:
         """Score architecture dimension based on documentation and modularity."""
         score = 0.0
         if has_adrs:
@@ -116,7 +116,7 @@ class AuditEngine:
         )
 
     def score_security(self, has_auth: bool, has_rate_limit: bool, has_validation: bool,
-                       has_secrets: bool, has_rls: bool, has_cors: bool):
+                       has_secrets: bool, has_rls: bool, has_cors: bool) -> None:
         """Score security dimension based on controls present."""
         score = 0.0
         for check, points in [(has_auth, 20), (has_rate_limit, 20), (has_validation, 20),
@@ -130,7 +130,7 @@ class AuditEngine:
         )
 
     def score_documentation(self, doc_count: int, has_changelog: bool, has_contributing: bool,
-                             has_readme: bool):
+                             has_readme: bool) -> None:
         """Score documentation dimension."""
         score = 0.0
         score += min(doc_count * 5, 50.0)
@@ -142,7 +142,7 @@ class AuditEngine:
             f"Docs: {doc_count}, Changelog: {has_changelog}, Contributing: {has_contributing}, README: {has_readme}"
         )
 
-    def score_traceability(self, rtm_count: int, validated_reqs: int, formula_count: int):
+    def score_traceability(self, rtm_count: int, validated_reqs: int, formula_count: int) -> None:
         """Score traceability based on RTM coverage."""
         coverage = validated_reqs / rtm_count * 100 if rtm_count > 0 else 0
         self.dimensions["traceability"].score = coverage
@@ -150,7 +150,7 @@ class AuditEngine:
             f"RTM: {rtm_count} requirements, {validated_reqs} validated, {formula_count} formulas"
         )
 
-    def score_testing(self, unit_count: int, integration_count: int, has_regression: bool, has_ci: bool):
+    def score_testing(self, unit_count: int, integration_count: int, has_regression: bool, has_ci: bool) -> None:
         """Score testing dimension."""
         score = 0.0
         score += min(unit_count, 40)
@@ -164,7 +164,7 @@ class AuditEngine:
             f"Unit: {unit_count}, Integration: {integration_count}, Regression: {has_regression}, CI: {has_ci}"
         )
 
-    def compute_overall(self) -> dict:
+    def compute_overall(self) -> dict[str, object]:
         """Compute weighted overall audit score and generate recommendations."""
         overall = 0.0
         all_recommendations = []
@@ -211,7 +211,11 @@ class AuditEngine:
 
         lines = []
         lines.append("=" * 60)
-        lines.append(f"  AUDIT REPORT — {self.run_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        ts = self.run_timestamp
+        if ts is not None:
+            lines.append(f"  AUDIT REPORT — {ts.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        else:
+            lines.append(f"  AUDIT REPORT — (no timestamp)")
         lines.append(f"  Overall Score: {result['overall']}/100 [{result['rating']}]")
         lines.append("=" * 60)
         lines.append("")

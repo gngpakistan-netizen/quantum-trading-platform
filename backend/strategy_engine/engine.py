@@ -400,7 +400,8 @@ def compute_confidence(state: MarketState) -> MarketState:
 
 def compute_evidence_aggregate(
     state: MarketState, bar: BarData,
-) -> tuple[float, float, float, float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float, float,
+           float, float, float, float, float, float, float, float]:
     """Compute 8-factor evidence scores matching Pine lines 1831-1847."""
     # Normalize each factor to 0-100
     ev_trend_bull = state.bull_trend_score
@@ -441,14 +442,6 @@ def normalize_scores(
     # Regime-based range base
     regime_range_base = 10.0 if regime_trending else (30.0 if regime_ranging else 45.0)
 
-    # Regime-aware modulation
-    (regime_strength - 0.5) * 2.0
-
-    # Weight bases (commented; used in full normalization)
-    # w_base_trend=0.20, w_base_struct=0.18, w_base_session=0.10, w_base_corr=0.05, w_base_mr=0.05
-
-
-
     total_bull = raw_bull
     total_bear = raw_bear
     raw_total = total_bull + total_bear
@@ -462,8 +455,8 @@ def normalize_scores(
     r_total = raw_bull_pct + raw_bear_pct + range_blended
 
     if r_total > 0:
-        bull_score = round(raw_bull_pct / r_total * 100.0)
-        bear_score = round(raw_bear_pct / r_total * 100.0)
+        bull_score = float(round(raw_bull_pct / r_total * 100.0))
+        bear_score = float(round(raw_bear_pct / r_total * 100.0))
         range_score = 100.0 - bull_score - bear_score
     else:
         bull_score, bear_score, range_score = 50.0, 50.0, 0.0
@@ -574,7 +567,7 @@ class StrategyEngine:
         # 4. HTF alignment
         (state.htf_bull_gate, state.htf_bear_gate,
          state.htf_alignment_long, state.htf_alignment_short,
-         state.htf_full_long, state.htf_full_short) = compute_htf_alignment(bar, self.config)
+         state.htf_full_long, state.htf_full_short) = compute_htf_alignment(bar)
 
         # 5. Bias scores
         state = compute_bias_scores(state)
@@ -599,7 +592,6 @@ class StrategyEngine:
         state.bull_score, state.bear_score, state.range_score, state.bias_label = normalize_scores(
             raw_bull, raw_bear, range_evidence,
             state.regime_strength, state.regime_trending, state.regime_ranging,
-            bar
         )
 
         # 9. Trade plan

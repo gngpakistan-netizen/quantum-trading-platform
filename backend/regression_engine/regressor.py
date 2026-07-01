@@ -36,7 +36,7 @@ class RegressionEngine:
         self.bounds = bounds
         self.baselines: dict[str, ValidationReport] = {}
 
-    def register_baseline(self, stream: str, report: ValidationReport):
+    def register_baseline(self, stream: str, report: ValidationReport) -> None:
         """Store a validation report as baseline for future comparison."""
         self.baselines[stream] = report
 

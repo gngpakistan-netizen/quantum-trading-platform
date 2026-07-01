@@ -54,7 +54,7 @@ class ReplayEngine:
         self.result = ReplayResult()
         self.prev_state: Optional[MarketState] = None
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset engine state for a new replay run."""
         self.result = ReplayResult()
         self.prev_state = None
@@ -153,7 +153,7 @@ class ReplayEngine:
 
         return self.result
 
-    def generate_validation_data(self) -> dict:
+    def generate_validation_data(self) -> dict[str, object]:
         """Generate validation-ready data from replay results."""
         return {
             "trades": self.result.trades,

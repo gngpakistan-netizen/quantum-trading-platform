@@ -5,7 +5,7 @@ Each stream has objective pass/fail criteria. Results stored in Supabase.
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from backend.common.models import FeatureSet, Trade
 
@@ -53,7 +53,7 @@ class ValidationReport:
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
 
-    def add_check(self, check: ValidationCheck):
+    def add_check(self, check: ValidationCheck) -> None:
         self.checks.append(check)
         self.total_checks += 1
         if check.passed:
@@ -225,7 +225,7 @@ class DashboardValidator:
 class StatisticalValidator:
     """Compute and validate statistical performance metrics."""
 
-    def compute_metrics(self, trades: list[Trade]) -> dict:
+    def compute_metrics(self, trades: list[Trade]) -> dict[str, object]:
         """Compute all statistical metrics from a list of closed trades."""
         closed = [t for t in trades if t.pnl is not None]
 
@@ -259,7 +259,7 @@ class StatisticalValidator:
         # Drawdown
         cumulative = 0
         peak = 0
-        max_dd = 0
+        max_dd = 0.0
         for t in closed:
             cumulative += t.pnl or 0
             if cumulative > peak:
@@ -326,7 +326,7 @@ class ValidationEngine:
         self.statistical = StatisticalValidator()
         self.timing = TimingValidator()
 
-    def run_stream(self, stream: str, **kwargs) -> ValidationReport:
+    def run_stream(self, stream: str, **kwargs: Any) -> ValidationReport:
         """Execute a single validation stream."""
         stream_map = {
             "mathematical": self._run_mathematical,
@@ -349,12 +349,12 @@ class ValidationEngine:
         report.completed_at = datetime.utcnow()
         return report
 
-    def run_all(self, **kwargs) -> dict[str, ValidationReport]:
+    def run_all(self, **kwargs: Any) -> dict[str, ValidationReport]:
         """Run all 5 validation streams."""
         streams = ["mathematical", "strategy", "dashboard", "statistical", "timing"]
         return {s: self.run_stream(s, **kwargs) for s in streams}
 
-    def _run_mathematical(self, report: ValidationReport, **kwargs):
+    def _run_mathematical(self, report: ValidationReport, **kwargs: Any) -> None:
         """Run mathematical validation checks."""
         feature_sets = kwargs.get("feature_sets", [])
 
@@ -371,7 +371,7 @@ class ValidationEngine:
             check = self.mathematical.validate_safe_div(a, b, exp)
             report.add_check(check)
 
-    def _run_strategy(self, report: ValidationReport, **kwargs):
+    def _run_strategy(self, report: ValidationReport, **kwargs: Any) -> None:
         """Run strategy execution validation."""
         ri1_trades = kwargs.get("ri1_trades", [])
         python_trades = kwargs.get("python_trades", [])
@@ -389,7 +389,7 @@ class ValidationEngine:
                     details="Trade found in RI-1 but missing from Python output",
                 ))
 
-    def _run_dashboard(self, report: ValidationReport, **kwargs):
+    def _run_dashboard(self, report: ValidationReport, **kwargs: Any) -> None:
         """Run dashboard synchronization validation."""
         snapshots = kwargs.get("snapshots", [])
         for snap in snapshots:
@@ -398,7 +398,7 @@ class ValidationEngine:
                 check = self.dashboard.validate_dashboard_value(fname, expected, actual)
                 report.add_check(check)
 
-    def _run_statistical(self, report: ValidationReport, **kwargs):
+    def _run_statistical(self, report: ValidationReport, **kwargs: Any) -> None:
         """Run statistical validation."""
         trades = kwargs.get("trades", [])
         metrics = self.statistical.compute_metrics(trades)
@@ -423,7 +423,7 @@ class ValidationEngine:
                     details=str(value),
                 ))
 
-    def _run_timing(self, report: ValidationReport, **kwargs):
+    def _run_timing(self, report: ValidationReport, **kwargs: object) -> None:
         """Run execution timing validation."""
         trades = kwargs.get("trades", [])
         for trade in trades:
