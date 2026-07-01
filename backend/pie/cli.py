@@ -12,13 +12,14 @@ Usage:
 """
 
 import sys
-import json
 from datetime import date
 from typing import Optional
 
 from backend.pie.models import (
-    Requirement, TodoItem, AuditScore, ValidationRun,
-    FormulaEntry, Release, RTM_REQUIREMENTS, PIE_TODOS,
+    PIE_TODOS,
+    RTM_REQUIREMENTS,
+    Release,
+    TodoItem,
 )
 
 
@@ -34,11 +35,13 @@ def cmd_status():
     print("║  XAUUSD Quantum Platform — Project Health               ║")
     print(f"║  {date.today().isoformat()}                                 ║")
     print("╠══════════════════════════════════════════════════════════╣")
-    print(f"║  REQUIREMENTS: {req_count:2d} total  {req_done:2d} done  {req_in_prog:2d} in prog  {req_count - req_done - req_in_prog:2d} pending  ║")
-    print(f"║  TODOS:        {todo_done + todo_open:2d} total  {todo_done:2d} done  {todo_open:2d} open                              ║")
-    print(f"║  AUDIT:        --/100  (no runs yet)                     ║")
-    print(f"║  FORMULAS:     0 verified                                ║")
-    print(f"║  BUILD:        setup in progress                         ║")
+    pending = req_count - req_done - req_in_prog
+    print(f"║  REQS: {req_count:2d} total  {req_done:2d} done  {req_in_prog:2d} prog  {pending:2d} pending  ║")
+    total_todos = todo_done + todo_open
+    print(f"║  TODOS: {total_todos:2d} total  {todo_done:2d} done  {todo_open:2d} open      ║")
+    print("║  AUDIT:        --/100  (no runs yet)                     ║")
+    print("║  FORMULAS:     0 verified                                ║")
+    print("║  BUILD:        setup in progress                         ║")
     print("╚══════════════════════════════════════════════════════════╝")
 
 
@@ -120,9 +123,7 @@ def main():
                 status_filter = args[i + 1]
         cmd_requirements(status_filter)
     elif cmd == "todo":
-        if len(args) < 2:
-            cmd_todo_list()
-        elif args[1] == "list":
+        if len(args) < 2 or args[1] == "list":
             cmd_todo_list()
         elif args[1] == "add":
             content = " ".join(args[2:])

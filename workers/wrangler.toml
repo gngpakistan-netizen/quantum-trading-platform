@@ -12,8 +12,3 @@ vars = { ENVIRONMENT = "production" }
 # API_KEY = "your-production-key"
 # SUPABASE_URL = "https://your-project.supabase.co"
 # SUPABASE_KEY = "your-service-role-key"
-
-[[kv_namespaces]]
-binding = "KV_CACHE"
-id = ""  # Set after creating via `wrangler kv:namespace create "KV_CACHE"`
-preview_id = ""

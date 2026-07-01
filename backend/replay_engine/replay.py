@@ -6,12 +6,15 @@ generate signals, manage positions. Captures full state snapshots.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Optional
 from uuid import UUID, uuid4
 
-from backend.common.models import Bar, Signal, Trade, FeatureSet
+from backend.common.models import Signal, Trade
 from backend.strategy_engine.engine import (
-    StrategyEngine, StrategyConfig, BarData, MarketState,
+    BarData,
+    MarketState,
+    StrategyConfig,
+    StrategyEngine,
     compute_position_size,
 )
 
@@ -43,7 +46,9 @@ class ReplayResult:
 class ReplayEngine:
     """Bar-by-bar replay engine with state machine."""
 
-    def __init__(self, config: StrategyConfig = StrategyConfig()):
+    def __init__(self, config: Optional[StrategyConfig] = None):
+        if config is None:
+            config = StrategyConfig()
         self.config = config
         self.strategy = StrategyEngine(config)
         self.result = ReplayResult()

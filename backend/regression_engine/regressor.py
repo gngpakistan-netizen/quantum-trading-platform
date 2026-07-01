@@ -4,8 +4,6 @@ Rejects changes that degrade validated behavior without explicit approval.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
 
 from backend.validation_engine.validator import ValidationReport
 
@@ -60,9 +58,11 @@ class RegressionEngine:
         # Check pass rate degradation
         pass_decrease = baseline.pass_rate - current.pass_rate
         if pass_decrease > self.bounds.max_pass_rate_decrease * 100:
-            regressions.append(
-                f"Pass rate decreased {pass_decrease:.1f}% (was {baseline.pass_rate:.1f}%, now {current.pass_rate:.1f}%)"
+            msg = (
+                f"Pass rate decreased {pass_decrease:.1f}% "
+                f"(was {baseline.pass_rate:.1f}%, now {current.pass_rate:.1f}%)"
             )
+            regressions.append(msg)
 
         # Check for new failures
         baseline_failed = {c.check_name for c in baseline.checks if not c.passed}

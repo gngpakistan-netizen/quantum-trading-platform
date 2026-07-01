@@ -1,9 +1,9 @@
 """Project Intelligence Engine (PIE) — Core data models."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, date
-from uuid import uuid4, UUID
+from datetime import date, datetime
 from typing import Optional
+from uuid import UUID, uuid4
 
 
 @dataclass

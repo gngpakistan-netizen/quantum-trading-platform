@@ -4,11 +4,10 @@ Each stream has objective pass/fail criteria. Results stored in Supabase.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, date
-from typing import Optional, Callable
-import math
+from datetime import date, datetime
+from typing import Optional
 
-from backend.common.models import Bar, FeatureSet, Signal, Trade
+from backend.common.models import FeatureSet, Trade
 
 
 # ============================================================
@@ -242,7 +241,8 @@ class StatisticalValidator:
         total_pnl = sum(t.pnl for t in closed)
         avg_win = sum(t.pnl for t in winners) / len(winners) if winners else 0
         avg_loss = sum(t.pnl for t in losers) / len(losers) if losers else 0
-        profit_factor = abs(sum(t.pnl for t in winners) / sum(t.pnl for t in losers)) if losers and sum(t.pnl for t in losers) != 0 else float('inf')
+        loss_sum = sum(t.pnl for t in losers) if losers else 0
+        profit_factor = abs(sum(t.pnl for t in winners) / loss_sum) if losers and loss_sum != 0 else float('inf')
 
         # Confusion matrix (long vs short)
         tp = sum(1 for t in closed if t.direction == "long" and t.pnl > 0)
@@ -393,9 +393,9 @@ class ValidationEngine:
         """Run dashboard synchronization validation."""
         snapshots = kwargs.get("snapshots", [])
         for snap in snapshots:
-            for field, expected in snap.get("expected", {}).items():
-                actual = snap.get("actual", {}).get(field, 0)
-                check = self.dashboard.validate_dashboard_value(field, expected, actual)
+            for fname, expected in snap.get("expected", {}).items():
+                actual = snap.get("actual", {}).get(fname, 0)
+                check = self.dashboard.validate_dashboard_value(fname, expected, actual)
                 report.add_check(check)
 
     def _run_statistical(self, report: ValidationReport, **kwargs):

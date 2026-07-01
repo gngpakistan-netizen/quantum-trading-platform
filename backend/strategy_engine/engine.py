@@ -4,11 +4,10 @@ Pure functions ported from XAUUSD_Quantum_3.3.pine.
 Every function is independently verifiable against the frozen RI-1.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-import math
 
-from backend.common.utils import safe_div, clamp
+from backend.common.utils import clamp, safe_div
 
 
 # ============================================================
@@ -226,7 +225,7 @@ def compute_trend_scores(bar: BarData, cfg: StrategyConfig = DEFAULT_CONFIG) -> 
     return bull, bear, bull >= cfg.trend_threshold, bear >= cfg.trend_threshold
 
 
-def compute_htf_alignment(bar: BarData, cfg: StrategyConfig = DEFAULT_CONFIG) -> tuple[bool, bool, int, int, int, int]:
+def compute_htf_alignment(bar: BarData) -> tuple[bool, bool, int, int, int, int]:
     """Compute HTF alignment scores matching Pine lines 296-328."""
     # HTF trend scoring: close vs EMA200 * 40 + EMA20 vs EMA50 * 40 + close vs EMA20 * 20
     def htf_score(close: float, ema20: float, ema50: float, ema200: float) -> float:
@@ -263,8 +262,8 @@ def compute_htf_alignment(bar: BarData, cfg: StrategyConfig = DEFAULT_CONFIG) ->
     alignment_long = (1 if htf_15m_bull else 0) + (1 if htf_1h_bull else 0) + (1 if htf_4h_bull else 0)
     alignment_short = (1 if htf_15m_bear else 0) + (1 if htf_1h_bear else 0) + (1 if htf_4h_bear else 0)
 
-    full_long = (1 if htf_5m_bull else 0) + (1 if htf_15m_bull else 0) + (1 if htf_1h_bull else 0) + (1 if htf_4h_bull else 0)
-    full_short = (1 if htf_5m_bear else 0) + (1 if htf_15m_bear else 0) + (1 if htf_1h_bear else 0) + (1 if htf_4h_bear else 0)
+    full_long = sum([htf_5m_bull, htf_15m_bull, htf_1h_bull, htf_4h_bull])
+    full_short = sum([htf_5m_bear, htf_15m_bear, htf_1h_bear, htf_4h_bear])
 
     return (
         alignment_long >= 2,
@@ -366,25 +365,25 @@ def compute_bias_scores(state: MarketState) -> MarketState:
     return state
 
 
+def _conf_score(val: float, hi: float, mid: float, lo: float) -> int:
+    if val >= hi:
+        return 100
+    if val >= mid:
+        return 60
+    if val >= lo:
+        return 30
+    return 10
+
 def compute_confidence(state: MarketState) -> MarketState:
     """Compute confidence score matching Pine lines 1805-1817."""
-    # Structure confidence
-    conf_struct = 100 if state.structure_score >= 80 else (60 if state.structure_score >= 50 else (30 if state.structure_score >= 20 else 10))
-
-    # MTF confidence
+    conf_struct = _conf_score(state.structure_score, 80, 50, 20)
     conf_mtf = int(round(max(state.htf_full_long, state.htf_full_short) * 100.0 / 7.0))
-
-    # Liquidity confidence
     conf_liq = 0
     conf_liq += 25 if (state.bull_bos or state.bear_bos) else 0
     conf_liq += 25 if (state.fvg_active or state.ob_bull_active or state.ob_bear_active) else 0
     conf_liq += 25 if state.liq_dest_score >= 50 else 0
-
-    # Macro confidence
-    conf_macro = 100 if state.macro_intel_conf >= 60 else (60 if state.macro_intel_conf >= 30 else (30 if state.macro_intel_conf >= 10 else 10))
-
-    # Session confidence
-    conf_session = 100 if state.session_quality >= 80 else (60 if state.session_quality >= 50 else (30 if state.session_quality >= 20 else 10))
+    conf_macro = _conf_score(state.macro_intel_conf, 60, 30, 10)
+    conf_session = _conf_score(state.session_quality, 80, 50, 20)
 
     state.confidence_score = int(round(
         (conf_struct * 20 + conf_mtf * 20 + conf_liq * 20 + conf_macro * 20 + conf_session * 20) / 100.0
@@ -399,7 +398,9 @@ def compute_confidence(state: MarketState) -> MarketState:
     return state
 
 
-def compute_evidence_aggregate(state: MarketState, bar: BarData, cfg: StrategyConfig = DEFAULT_CONFIG) -> tuple[float, float, float, float, float, float, float, float]:
+def compute_evidence_aggregate(
+    state: MarketState, bar: BarData,
+) -> tuple[float, float, float, float, float, float, float, float]:
     """Compute 8-factor evidence scores matching Pine lines 1831-1847."""
     # Normalize each factor to 0-100
     ev_trend_bull = state.bull_trend_score
@@ -432,33 +433,21 @@ def compute_evidence_aggregate(state: MarketState, bar: BarData, cfg: StrategyCo
             ev_corr_bull, ev_corr_bear, ev_mr_bull, ev_mr_bear)
 
 
-def normalize_scores(raw_bull: float, raw_bear: float, range_evidence: float,
-                     regime_strength: float, regime_trending: bool, regime_ranging: bool,
-                     bar: BarData) -> tuple[float, float, float, str]:
+def normalize_scores(
+    raw_bull: float, raw_bear: float, range_evidence: float,
+    regime_strength: float, regime_trending: bool, regime_ranging: bool,
+) -> tuple[float, float, float, str]:
     """Normalize evidence scores to 0-100 matching Pine lines 1890-1934."""
     # Regime-based range base
     regime_range_base = 10.0 if regime_trending else (30.0 if regime_ranging else 45.0)
 
     # Regime-aware modulation
-    k_mod = (regime_strength - 0.5) * 2.0
+    (regime_strength - 0.5) * 2.0
 
-    w_base_trend = 0.20
-    w_base_struct = 0.18
-    w_base_flow = 0.15
-    w_base_macro = 0.15
-    w_base_liq = 0.12
-    w_base_session = 0.10
-    w_base_corr = 0.05
-    w_base_mr = 0.05
+    # Weight bases (commented; used in full normalization)
+    # w_base_trend=0.20, w_base_struct=0.18, w_base_session=0.10, w_base_corr=0.05, w_base_mr=0.05
 
-    w_trend = w_base_trend + k_mod * 0.10
-    w_struct = w_base_struct - k_mod * 0.04
-    w_flow = w_base_flow
-    w_macro = w_base_macro
-    w_liq = w_base_liq
-    w_session = w_base_session - k_mod * 0.03
-    w_corr = w_base_corr + k_mod * 0.02
-    w_mr = w_base_mr - k_mod * 0.05
+
 
     total_bull = raw_bull
     total_bear = raw_bear
@@ -534,7 +523,10 @@ def compute_trade_plan(state: MarketState, bar: BarData, cfg: StrategyConfig = D
     state.should_sell = sell_prefilters and (state.bear_bos or state.displacement_down)
 
     # Trade Plan
-    state.tp_is_long = state.should_buy if (state.should_buy or state.should_sell) else (state.bull_bias_score >= state.bear_bias_score)
+    if state.should_buy or state.should_sell:
+        state.tp_is_long = state.should_buy
+    else:
+        state.tp_is_long = state.bull_bias_score >= state.bear_bias_score
     state.tp_dir_str = "LONG" if state.tp_is_long else "SHORT"
 
     state.tp_entry = bar.close
@@ -563,7 +555,7 @@ class StrategyEngine:
     def __init__(self, config: StrategyConfig = DEFAULT_CONFIG):
         self.config = config
 
-    def compute(self, bar: BarData, prev_state: Optional[MarketState] = None) -> MarketState:
+    def compute(self, bar: BarData, _prev_state: Optional[MarketState] = None) -> MarketState:
         """Compute full market state for a single bar."""
         state = MarketState()
 
@@ -573,7 +565,8 @@ class StrategyEngine:
         state.bear_trend_score = bear_score
 
         # 2. Regime
-        state.regime_trending, state.regime_ranging, state.regime_dead, state.regime_strength = compute_regime(bar, self.config)
+        reg = compute_regime(bar, self.config)
+        state.regime_trending, state.regime_ranging, state.regime_dead, state.regime_strength = reg
 
         # 3. Adaptive ATR
         bar.adaptive_atr = compute_adaptive_atr(bar, state.regime_strength)

@@ -52,9 +52,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: cloudflare/wrangler-action@v3
+      - uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          workingDirectory: workers/
+          node-version: "22"
+      - run: npm install -g wrangler
+      - run: wrangler deploy
+        workingDirectory: workers/
         env:
-          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

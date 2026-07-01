@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from backend.pie.models import Requirement, FormulaEntry
+from backend.pie.models import FormulaEntry, Requirement
 
 
 @dataclass

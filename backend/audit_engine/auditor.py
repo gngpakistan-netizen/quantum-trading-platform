@@ -144,10 +144,7 @@ class AuditEngine:
 
     def score_traceability(self, rtm_count: int, validated_reqs: int, formula_count: int):
         """Score traceability based on RTM coverage."""
-        if rtm_count > 0:
-            coverage = validated_reqs / rtm_count * 100
-        else:
-            coverage = 0
+        coverage = validated_reqs / rtm_count * 100 if rtm_count > 0 else 0
         self.dimensions["traceability"].score = coverage
         self.dimensions["traceability"].add_evidence(
             f"RTM: {rtm_count} requirements, {validated_reqs} validated, {formula_count} formulas"
