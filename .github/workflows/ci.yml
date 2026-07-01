@@ -57,6 +57,6 @@ jobs:
           node-version: "22"
       - run: npm install -g wrangler
       - run: wrangler deploy
-        workingDirectory: workers/
+        working-directory: workers/
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
