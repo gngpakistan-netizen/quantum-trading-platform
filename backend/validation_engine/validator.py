@@ -423,7 +423,7 @@ class ValidationEngine:
                     details=str(value),
                 ))
 
-    def _run_timing(self, report: ValidationReport, **kwargs: object) -> None:
+    def _run_timing(self, report: ValidationReport, **kwargs: Any) -> None:
         """Run execution timing validation."""
         trades = kwargs.get("trades", [])
         for trade in trades:
